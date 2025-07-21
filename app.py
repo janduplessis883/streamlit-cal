@@ -62,7 +62,7 @@ def show_admin_panel(df):
     st.sidebar.header("Manage Availability")
     with st.sidebar.form("availability_form"):
         st.write("Select dates and pharmacists to mark as available.")
-        
+
         today = datetime.today()
         # Calculate two months ahead
         two_months_ahead = today + timedelta(days=60) # Approximately 2 months
@@ -71,7 +71,7 @@ def show_admin_panel(df):
         while current_date <= two_months_ahead:
             dates_to_show.append(current_date)
             current_date += timedelta(days=1)
-        
+
         # Create a dictionary to easily check current availability
         current_availability = {}
         if not df.empty:
@@ -84,7 +84,7 @@ def show_admin_panel(df):
         for date in dates_to_show:
             is_weekend = date.weekday() >= 5
             date_str = date.strftime('%A, %d %B')
-            
+
             if is_weekend:
                 st.markdown(f"**{date_str} (Weekend)**")
             else:
@@ -93,17 +93,17 @@ def show_admin_panel(df):
             cols = st.columns(2)
             for pharm in [1, 2]:
                 checkbox_key = f"avail_{date.strftime('%Y%m%d')}_{pharm}"
-                
+
                 # Pre-fill checkbox based on current availability
                 initial_value = current_availability.get((date.date(), pharm), False)
 
                 checked = cols[pharm-1].checkbox(
-                    f"Pharmacist {pharm}", 
-                    value=initial_value, 
+                    f"Pharmacist {pharm}",
+                    value=initial_value,
                     key=checkbox_key,
                     disabled=is_weekend # Disable checkboxes for weekends
                 )
-                
+
                 # If not a weekend and checked, add to selected_slots
                 if not is_weekend and checked:
                     selected_slots.append({
@@ -127,7 +127,7 @@ def show_admin_panel(df):
                         "surgery": "",
                         "email": ""
                     })
-            
+
             # Overwrite the Google Sheet with the new availability
             try:
                 sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
@@ -151,7 +151,7 @@ def show_booking_dialog(slot):
     with st.form(key=f"form_dialog_{slot['unique_code']}"):
         surgery = st.text_input("Surgery Name", key=f"surgery_dialog_{slot['unique_code']}")
         email = st.text_input("Email Address", key=f"email_dialog_{slot['unique_code']}")
-        
+
         col1, col2 = st.columns(2)
         submitted = col1.form_submit_button("Submit Booking")
         cancel_button = col2.form_submit_button("Cancel")
@@ -163,18 +163,18 @@ def show_booking_dialog(slot):
                 update_booking(slot, surgery, email)
                 st.success("Booking saved successfully!")
                 st.rerun() # Rerun to close dialog and refresh main app
-        
+
         if cancel_button:
             st.rerun() # Rerun to close dialog
 
 def display_calendar():
-    st.set_page_config(page_title="Pharmacist Booking", layout="wide")
-    st.title(" Pharmacist Appointment Booking")
+    st.set_page_config(page_title="Pharma-Cal Brompton Heatlh PCN", layout="centered")
+    st.title(":material/pill: Request a Pharmacist Session")
 
     # --- Admin Sidebar ---
-    st.sidebar.title("Admin Panel")
+    st.sidebar.title(":material/settings: Admin Panel")
     password = st.sidebar.text_input("Password", type="password")
-    
+
     df = get_schedule_data()
 
     if password == "super user":
@@ -208,7 +208,7 @@ def display_calendar():
             shift = row['am_pm'].upper()
             pharm = row['pharm']
             booked = str(row['booked']).upper() == "TRUE"
-            
+
             # Modify btn_label based on shift
             if shift == "AM":
                 btn_label = f"09:00 - 12:30 — Pharmacist {pharm}"
