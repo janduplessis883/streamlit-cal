@@ -1,0 +1,7 @@
+streamlit
+gspread
+google-auth-oauthlib
+pandas
+st-pages
+google-api-python-client
+google-auth-httplib2
