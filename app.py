@@ -9,6 +9,8 @@ import time
 SPREADSHEET_ID = "1m6fJqggnvRJ9u-Hk5keUaPZ_gJHrd4GZmowE3j3nH-c"
 SHEET_NAME = "Sheet1"
 SHEET_NAME_SURGERIES = "Sheet2"
+SHEET_NAME_PHARMACISTS = "Sheet3"
+
 
 # Authenticate with Google Sheets using st.secrets
 @st.cache_resource
@@ -67,7 +69,7 @@ def add_surgery_data(surgery_name, email_address):
             if row.get("surgery") == surgery_name and row.get("email") == email_address:
                 st.info(f"Surgery '{surgery_name}' with email '{email_address}' already exists.")
                 return
-        
+
         sheet.append_row([surgery_name, email_address])
         st.success(f"Surgery '{surgery_name}' added successfully!")
         get_surgeries_data.clear() # Clear cache to refresh data
@@ -96,6 +98,64 @@ def delete_surgery_data(surgery_name, email_address):
     except Exception as e:
         st.error(f"An error occurred while deleting surgery data from Google Sheet: {e}")
 
+@st.cache_data(ttl=3600) # Cache for 1 hour
+def get_pharmacists_data():
+    """Fetch saved pharmacists data from Google Sheet (Sheet3)"""
+    try:
+        sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME_PHARMACISTS)
+        with st.spinner("Fetching pharmacists data..."):
+            data = sheet.get_all_records()
+        df = pd.DataFrame(data)
+        return df
+    except gspread.exceptions.WorksheetNotFound:
+        st.warning(f"Worksheet '{SHEET_NAME_PHARMACISTS}' not found. Creating it...")
+        # Create the worksheet if it doesn't exist
+        sheet = client.open_by_key(SPREADSHEET_ID).add_worksheet(SHEET_NAME_PHARMACISTS, rows=1, cols=2)
+        sheet.update([["Name", "Email"]]) # Add headers
+        return pd.DataFrame(columns=["Name"])
+    except Exception as e:
+        st.error(f"An error occurred while reading pharmacists data from Google Sheet: {e}")
+        return pd.DataFrame()
+
+def add_pharmacist_data(pharmacist_name, pharmacist_email):
+    """Add a new pharmacist to Google Sheet (Sheet3)"""
+    try:
+        sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME_PHARMACISTS)
+        # Check if pharmacist already exists
+        existing_data = sheet.get_all_records()
+        for row in existing_data:
+            if row.get("Name") == pharmacist_name and row.get("Email") == pharmacist_email:
+                st.info(f"Pharmacist '{pharmacist_name}' with email '{pharmacist_email}' already exists.")
+                return
+
+        sheet.append_row([pharmacist_name, pharmacist_email])
+        st.success(f"Pharmacist '{pharmacist_name}' added successfully!")
+        get_pharmacists_data.clear() # Clear cache to refresh data
+    except Exception as e:
+        st.error(f"An error occurred while adding pharmacist data to Google Sheet: {e}")
+
+def delete_pharmacist_data(pharmacist_name, pharmacist_email):
+    """Delete a pharmacist entry from Google Sheet (Sheet3)"""
+    try:
+        sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME_PHARMACISTS)
+        # Find the row index of the pharmacist to delete
+        # gspread's find method returns the Cell object, which has a 'row' attribute
+        cell = sheet.find(pharmacist_name)
+        if cell:
+            # Verify email matches to prevent accidental deletion if pharmacist names are not unique
+            row_values = sheet.row_values(cell.row)
+            # Assuming 'Name' is in column 1 and 'Email' in column 2
+            if len(row_values) >= 2 and row_values[1] == pharmacist_email:
+                sheet.delete_rows(cell.row)
+                st.success(f"Pharmacist '{pharmacist_name}' deleted successfully!")
+                get_pharmacists_data.clear() # Clear cache to refresh data
+            else:
+                st.error(f"Could not delete pharmacist: Email mismatch for '{pharmacist_name}'.")
+        else:
+            st.error(f"Pharmacist '{pharmacist_name}' not found.")
+    except Exception as e:
+        st.error(f"An error occurred while deleting pharmacist data from Google Sheet: {e}")
+
 def update_booking(slot, surgery, email):
     """Update the Google Sheet with booking details"""
     try:
@@ -122,8 +182,8 @@ def update_booking(slot, surgery, email):
 
 def show_admin_panel(df):
     st.sidebar.header("Admin Panel")
-    
-    admin_tab = st.sidebar.radio("Admin Options", ["Manage Availability", "Manage Surgeries"])
+
+    admin_tab = st.sidebar.radio("Admin Options", ["Manage Availability", "Manage Surgeries", "Manage Pharmacists"])
 
     if admin_tab == "Manage Availability":
         st.sidebar.subheader("Manage Availability")
@@ -239,7 +299,7 @@ def show_admin_panel(df):
                     add_surgery_data(new_surgery_name, new_surgery_email)
                 else:
                     st.error("Both surgery name and email are required.")
-        
+
         st.sidebar.subheader("Existing Surgeries")
         surgeries_df = get_surgeries_data()
         if not surgeries_df.empty:
@@ -253,6 +313,42 @@ def show_admin_panel(df):
                         st.rerun()
         else:
             st.sidebar.info("No surgeries saved yet.")
+
+    elif admin_tab == "Manage Pharmacists":
+        st.sidebar.subheader("Add New Pharmacist")
+        with st.sidebar.form("add_pharmacist_form"):
+            # Initialize session state for input fields if not already present
+            if 'new_pharmacist_name_input' not in st.session_state:
+                st.session_state.new_pharmacist_name_input = ""
+            if 'new_pharmacist_email_input' not in st.session_state:
+                st.session_state.new_pharmacist_email_input = ""
+
+            st.text_input("Pharmacist Name (e.g., John Doe)", key="new_pharmacist_name_input", value=st.session_state.new_pharmacist_name_input)
+            st.text_input("Pharmacist Email", key="new_pharmacist_email_input", value=st.session_state.new_pharmacist_email_input)
+
+            def _submit_add_pharmacist():
+                if st.session_state.new_pharmacist_name_input and st.session_state.new_pharmacist_email_input:
+                    add_pharmacist_data(st.session_state.new_pharmacist_name_input, st.session_state.new_pharmacist_email_input)
+                    st.session_state.new_pharmacist_name_input = "" # Clear after successful add
+                    st.session_state.new_pharmacist_email_input = "" # Clear after successful add
+                else:
+                    st.error("Pharmacist name and email are required.")
+
+            st.form_submit_button("Add Pharmacist", on_click=_submit_add_pharmacist)
+
+        st.sidebar.subheader("Existing Pharmacists")
+        pharmacists_df = get_pharmacists_data()
+        if not pharmacists_df.empty:
+            for idx, row in pharmacists_df.iterrows():
+                col1, col2 = st.sidebar.columns([0.8, 0.2])
+                with col1:
+                    st.markdown(f"{idx + 1}. **{row['Name']}**: {row['Email']}")
+                with col2:
+                    if st.button(":material/delete:", key=f"delete_pharmacist_{idx}"):
+                        delete_pharmacist_data(row['Name'], row['Email'])
+                        st.rerun()
+        else:
+            st.sidebar.info("No pharmacists saved yet.")
 
 @st.dialog("Booking Details")
 def show_booking_dialog(slot):
@@ -273,7 +369,7 @@ def show_booking_dialog(slot):
 
         manual_surgery_input = ""
         manual_email_input = ""
-        
+
         if selected_surgery_option == "Add New Surgery":
             manual_surgery_input = st.text_input("New Surgery Name", key=f"new_surgery_name_{slot['unique_code']}")
             manual_email_input = st.text_input("New Email Address", key=f"new_email_address_{slot['unique_code']}")
@@ -283,7 +379,7 @@ def show_booking_dialog(slot):
             # Pre-fill with selected surgery's email
             selected_surgery_row = surgeries_df[surgeries_df["surgery"] == selected_surgery_option]
             prefilled_email = selected_surgery_row["email"].iloc[0] if not selected_surgery_row.empty else ""
-            
+
             st.text_input("Surgery Name", value=selected_surgery_option, disabled=True, key=f"display_surgery_{slot['unique_code']}")
             st.text_input("Email Address", value=prefilled_email, disabled=True, key=f"display_email_{slot['unique_code']}")
             current_surgery = selected_surgery_option
@@ -300,7 +396,7 @@ def show_booking_dialog(slot):
                 # If a new surgery was added, save it to Sheet2
                 if selected_surgery_option == "Add New Surgery":
                     add_surgery_data(current_surgery, current_email)
-                
+
                 update_booking(slot, current_surgery, current_email)
                 st.success("Booking saved successfully!")
                 time.sleep(1.5)
@@ -313,7 +409,7 @@ st.set_page_config(page_title="Pharma-Cal Brompton Heatlh PCN", layout="centered
 
 def display_calendar():
     st.title(":material/pill: Request a Pharmacist Session")
-
+    st.logo('noname.png', size="large")
     # --- Admin Sidebar ---
     st.sidebar.title(":material/settings: Admin Panel")
     password = st.sidebar.text_input("Password", type="password")
@@ -344,7 +440,7 @@ def display_calendar():
             continue
 
         st.subheader(f"{date.strftime('%A, %d %B %Y')}")
-        
+
         # Create two columns for Pharmacist 1 and Pharmacist 2
         pharm_cols = st.columns(2)
 
@@ -370,6 +466,8 @@ def display_calendar():
 
                 if booked:
                     st.button(btn_label + " (Booked)", key=unique_key, disabled=True)
+                    if row['surgery']:
+                        st.caption(row['surgery'])
                 else:
                     if st.button(btn_label, key=unique_key):
                         show_booking_dialog(row.to_dict())
@@ -396,6 +494,8 @@ def display_calendar():
 
                 if booked:
                     st.button(btn_label + " (Booked)", key=unique_key, disabled=True)
+                    if row['surgery']:
+                        st.caption(row['surgery'])
                 else:
                     if st.button(btn_label, key=unique_key):
                         show_booking_dialog(row.to_dict())
