@@ -111,8 +111,8 @@ def get_pharmacists_data():
         st.warning(f"Worksheet '{SHEET_NAME_PHARMACISTS}' not found. Creating it...")
         # Create the worksheet if it doesn't exist
         sheet = client.open_by_key(SPREADSHEET_ID).add_worksheet(SHEET_NAME_PHARMACISTS, rows=1, cols=1)
-        sheet.update([["Name"]]) # Add header
-        return pd.DataFrame(columns=["Name"])
+        sheet.update([["Name", "Email"]]) # Add header
+        return pd.DataFrame(columns=["Name", "Emnail"])
     except Exception as e:
         st.error(f"An error occurred while reading pharmacists data from Google Sheet: {e}")
         return pd.DataFrame()
@@ -159,7 +159,6 @@ def update_booking(slot, surgery, email):
         st.error(f"An error occurred while updating the booking in Google Sheet: {e}")
 
 def show_admin_panel(df):
-    st.sidebar.header("Admin Panel")
 
     admin_tab = st.sidebar.radio("Admin Options", ["Manage Availability", "Manage Surgeries", "Manage Pharmacists"])
 
@@ -377,7 +376,7 @@ def show_booking_dialog(slot):
 st.set_page_config(page_title="Pharma-Cal Brompton Heatlh PCN", layout="centered")
 
 def display_calendar():
-    st.title(":material/pill: Request a Pharmacist Session")
+    st.title("Request a Pharmacist Session :material/pill:")
     st.logo('noname.png', size="large")
     # --- Admin Sidebar ---
     st.sidebar.title(":material/settings: Admin Panel")
