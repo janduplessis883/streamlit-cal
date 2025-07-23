@@ -19,7 +19,9 @@ textColor = "#1e293b"
 font = "sans serif"
 
 baseRadius = "medium"
+
 linkColor = "#64748b"
+
 [deprecation]
 showPyplotGlobalUse = false
 

@@ -164,29 +164,36 @@ def show_admin_panel(df):
 
     if admin_tab == "Manage Availability":
         st.sidebar.subheader("Manage Availability")
+        num_weeks = st.sidebar.slider("Number of weeks to show", 1, 12, 2)
+
+        pharmacists_df = get_pharmacists_data()
+        pharmacist_names = ["None"] + sorted(pharmacists_df["Name"].tolist()) if not pharmacists_df.empty else ["None"]
+
         with st.sidebar.form("availability_form"):
             st.write("Select dates and pharmacists to mark as available.")
 
             today = datetime.today()
-            # Calculate two months ahead
-            two_months_ahead = today + timedelta(days=60) # Approximately 2 months
+            end_date = today + timedelta(weeks=num_weeks)
             dates_to_show = []
             current_date = today
-            while current_date <= two_months_ahead:
+            while current_date <= end_date:
                 dates_to_show.append(current_date)
                 current_date += timedelta(days=1)
 
-            # Create a dictionary to store current availability and booked status for each slot
             current_availability = {}
             if not df.empty:
-                df['Date'] = pd.to_datetime(df['Date']).dt.date # Ensure date comparison works
-                for _, row in df.iterrows():
-                    # Store full row data for each unique slot (date, pharm, am_pm)
-                    current_availability[(row['Date'], row['pharm'], row['am_pm'])] = {
-                        'booked': str(row['booked']).upper() == "TRUE",
-                        'surgery': row['surgery'],
-                        'email': row['email'],
-                        'unique_code': row['unique_code']
+                df_copy = df.copy()
+                if 'slot_index' not in df_copy.columns:
+                    df_copy['slot_index'] = df_copy.groupby(['Date', 'am_pm']).cumcount()
+                df_copy['Date'] = pd.to_datetime(df_copy['Date']).dt.date
+                for _, row in df_copy.iterrows():
+                    key = (row['Date'], row['slot_index'], row['am_pm'])
+                    current_availability[key] = {
+                        'booked': str(row.get('booked', 'FALSE')).upper() == "TRUE",
+                        'surgery': row.get('surgery', ''),
+                        'email': row.get('email', ''),
+                        'unique_code': row.get('unique_code', ''),
+                        'pharmacist_name': row.get('pharmacist_name', 'None')
                     }
 
             selected_slots = []
@@ -200,65 +207,64 @@ def show_admin_panel(df):
                 else:
                     st.markdown(f"**{date_str}**")
 
-                cols = st.columns(2)
-                for pharm in [1, 2]:
-                    for shift_type in ['am', 'pm']: # Iterate through AM/PM shifts
-                        checkbox_key = f"avail_{date.strftime('%Y%m%d')}_{pharm}_{shift_type}"
+                    cols = st.columns(2)
+                    for i, col in enumerate(cols):
+                        with col:
+                            for shift_type in ['am', 'pm']:
+                                slot_key = f"avail_{date.strftime('%Y%m%d')}_{shift_type}_{i}"
 
-                        # Get slot info, default to unbooked if not found
-                        slot_info = current_availability.get((date.date(), pharm, shift_type), {'booked': False})
-                        is_booked = slot_info['booked']
+                                lookup_key = (date.date(), i, shift_type)
+                                slot_info = current_availability.get(lookup_key, {'booked': False, 'pharmacist_name': 'None'})
+                                is_booked = slot_info['booked']
 
-                        # Pre-fill checkbox based on current availability
-                        # A slot is initially checked if it exists in current_availability
-                        initial_value = (date.date(), pharm, shift_type) in current_availability
+                                default_pharmacist = slot_info.get('pharmacist_name', 'None')
+                                if default_pharmacist not in pharmacist_names:
+                                    default_pharmacist = "None"
 
-                        checked = cols[pharm-1].checkbox(
-                            f"Pharmacist {pharm} ({shift_type.upper()})",
-                            value=initial_value,
-                            key=checkbox_key,
-                            disabled=is_weekend or is_booked # Disable if weekend OR booked
-                        )
+                                selected_pharmacist = st.selectbox(
+                                    f"{shift_type.upper()} Slot",
+                                    pharmacist_names,
+                                    index=pharmacist_names.index(default_pharmacist),
+                                    key=slot_key,
+                                    disabled=is_weekend or is_booked
+                                )
 
-                        # If not a weekend and checked (or was booked and thus disabled but implicitly selected), add to selected_slots
-                        if not is_weekend and (checked or is_booked): # Keep booked slots selected
-                            selected_slots.append({
-                                "date": date,
-                                "pharm": pharm,
-                                "am_pm": shift_type,
-                                "booked_info": slot_info # Pass along the existing booked info
-                            })
+                                if not is_weekend and selected_pharmacist != "None":
+                                    selected_slots.append({
+                                        "date": date,
+                                        "am_pm": shift_type,
+                                        "pharmacist_name": selected_pharmacist,
+                                        "booked_info": slot_info,
+                                        "pharm_id": i
+                                    })
 
             submitted = st.form_submit_button("Update Availability")
             if submitted:
-                # Create a completely new DataFrame based on selected_slots
                 new_df_data = []
                 for slot in selected_slots:
-                    # Check if this slot was previously booked
-                    was_booked = slot['booked_info']['booked'] if 'booked_info' in slot else False
+                    was_booked = slot['booked_info']['booked']
                     booked_surgery = slot['booked_info']['surgery'] if was_booked else ""
                     booked_email = slot['booked_info']['email'] if was_booked else ""
-                    booked_unique_code = slot['booked_info']['unique_code'] if was_booked else f"{int(slot['date'].timestamp())}-{slot['am_pm']}-{slot['pharm']}"
 
                     new_df_data.append({
-                        "unique_code": booked_unique_code,
+                        "unique_code": f"{int(slot['date'].timestamp())}-{slot['am_pm']}-{slot['pharm_id']}",
                         "Date": slot['date'].strftime('%Y-%m-%d'),
                         "am_pm": slot['am_pm'],
-                        "pharm": slot['pharm'],
                         "booked": "TRUE" if was_booked else "FALSE",
                         "surgery": booked_surgery,
-                        "email": booked_email
+                        "email": booked_email,
+                        "pharmacist_name": slot['pharmacist_name'],
+                        "slot_index": slot['pharm_id']
                     })
 
-                # Overwrite the Google Sheet with the new availability
                 try:
                     sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
                     with st.spinner("Updating availability..."):
                         sheet.clear()
-                        # Convert DataFrame to list of lists, handling potential NaN values
-                        # Ensure all values are strings for gspread
-                        data_to_write = [list(new_df_data[0].keys())] + [[str(val) for val in row.values()] for row in new_df_data]
-                        sheet.update(data_to_write)
+                        if new_df_data:
+                            headers = list(new_df_data[0].keys())
+                            data_to_write = [headers] + [[str(row.get(h, '')) for h in headers] for row in new_df_data]
+                            sheet.update(data_to_write)
                     st.success("Availability updated in Google Sheet!")
                     st.rerun()
                 except Exception as e:
@@ -266,7 +272,7 @@ def show_admin_panel(df):
 
     elif admin_tab == "Manage Surgeries":
         st.sidebar.subheader("Add New Surgery")
-        with st.sidebar.form("add_surgery_form"):
+        with st.sidebar.form("add_surgery_form", clear_on_submit=True):
             new_surgery_name = st.text_input("Surgery Name")
             new_surgery_email = st.text_input("Email Address")
             add_surgery_submitted = st.form_submit_button("Add Surgery")
@@ -293,7 +299,7 @@ def show_admin_panel(df):
 
     elif admin_tab == "Manage Pharmacists":
         st.sidebar.subheader("Add New Pharmacist")
-        with st.sidebar.form("add_pharmacist_form"):
+        with st.sidebar.form("add_pharmacist_form", clear_on_submit=True):
             new_pharmacist_name = st.text_input("Pharmacist Name (e.g., John Doe)")
             new_pharmacist_email = st.text_input("Pharmacist Email")
             add_pharmacist_submitted = st.form_submit_button("Add Pharmacist")
@@ -321,9 +327,9 @@ def show_admin_panel(df):
 @st.dialog("Booking Details")
 def show_booking_dialog(slot):
     shift = slot['am_pm'].upper()
-    pharm = slot['pharm']
+    pharmacist_name = slot.get('pharmacist_name', 'Pharmacist') # Default to 'Pharmacist' if name is not available
 
-    st.markdown(f"**Booking: Pharmacist {pharm} — {shift} on {pd.to_datetime(slot['Date']).strftime('%Y-%m-%d')}**")
+    st.markdown(f"**Booking: {pharmacist_name} — {shift} on {pd.to_datetime(slot['Date']).strftime('%Y-%m-%d')}**")
 
     surgeries_df = get_surgeries_data()
     surgery_names = ["Add New Surgery"] + sorted(surgeries_df["surgery"].tolist()) if not surgeries_df.empty else ["Add New Surgery"]
@@ -384,6 +390,16 @@ def display_calendar():
 
     df = get_schedule_data()
 
+    if not df.empty:
+        if 'slot_index' not in df.columns:
+            if 'pharm' in df.columns and pd.api.types.is_numeric_dtype(df['pharm']):
+                df['slot_index'] = df['pharm'].astype(int) - 1
+            else:
+                df['slot_index'] = df.groupby(['Date', 'am_pm']).cumcount()
+
+        if 'pharmacist_name' not in df.columns and 'pharm' in df.columns:
+             df['pharmacist_name'] = df['pharm']
+
     if password == "super user":
         show_admin_panel(df)
     elif password != "":
@@ -397,7 +413,7 @@ def display_calendar():
     df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
     df = df.dropna(subset=['Date'])
 
-    upcoming = df[df['Date'] >= datetime.today()].sort_values(['Date', 'am_pm', 'pharm'])
+    upcoming = df[df['Date'] >= datetime.today()].sort_values(['Date', 'am_pm', 'slot_index'])
 
     if upcoming.empty:
         st.info("No upcoming shifts available.")
@@ -409,64 +425,31 @@ def display_calendar():
 
         st.subheader(f"{date.strftime('%A, %d %B %Y')}")
 
-        # Create two columns for Pharmacist 1 and Pharmacist 2
-        pharm_cols = st.columns(2)
+        pharmacist_names_today = sorted(daily['pharmacist_name'].unique())
+        pharm_cols = st.columns(len(pharmacist_names_today))
 
-        # Filter and display sessions for Pharmacist 1 in the first column
-        pharm1_slots = daily[daily['pharm'] == 1].sort_values(['am_pm'])
-        with pharm_cols[0]:
-            st.markdown("**Pharmacist 1**")
-            if pharm1_slots.empty:
-                st.info("No sessions available for Pharmacist 1.")
-            for i, row in pharm1_slots.iterrows():
-                shift = row['am_pm'].upper()
-                pharm = row['pharm']
-                booked = str(row['booked']).upper() == "TRUE"
+        for i, pharmacist_name in enumerate(pharmacist_names_today):
+            with pharm_cols[i]:
+                st.markdown(f":orange[**{pharmacist_name}**]")
+                pharmacist_slots = daily[daily['pharmacist_name'] == pharmacist_name].sort_values(['am_pm'])
 
-                if shift == "AM":
-                    btn_label = f"Pharmacist {pharm}: 09:00 - 12:30"
-                elif shift == "PM":
-                    btn_label = f"Pharmacist {pharm}: 14:00 - 17:30"
-                else:
-                    btn_label = f"Pharmacist {pharm} {shift}"
+                if pharmacist_slots.empty:
+                    st.info(f"No sessions available for {pharmacist_name}.")
 
-                unique_key = f"{row['unique_code']}_{i}"
+                for _, row in pharmacist_slots.iterrows():
+                    shift = row['am_pm'].upper()
+                    booked = str(row['booked']).upper() == "TRUE"
 
-                if booked:
-                    st.button(btn_label + " (Booked)", key=unique_key, disabled=True)
-                    if row['surgery']:
-                        st.caption(row['surgery'])
-                else:
-                    if st.button(btn_label, key=unique_key):
-                        show_booking_dialog(row.to_dict())
+                    btn_label = "09:00 - 12:30" if shift == "AM" else "14:00 - 17:30"
+                    unique_key = f"{row['unique_code']}_{row['pharmacist_name']}"
 
-        # Filter and display sessions for Pharmacist 2 in the second column
-        pharm2_slots = daily[daily['pharm'] == 2].sort_values(['am_pm'])
-        with pharm_cols[1]:
-            st.markdown("**Pharmacist 2**")
-            if pharm2_slots.empty:
-                st.info("No sessions available for Pharmacist 2.")
-            for i, row in pharm2_slots.iterrows():
-                shift = row['am_pm'].upper()
-                pharm = row['pharm']
-                booked = str(row['booked']).upper() == "TRUE"
-
-                if shift == "AM":
-                    btn_label = f"Pharmacist {pharm}: 09:00 - 12:30"
-                elif shift == "PM":
-                    btn_label = f"Pharmacist {pharm}: 14:00 - 17:30"
-                else:
-                    btn_label = f"Pharmacist {pharm} {shift}"
-
-                unique_key = f"{row['unique_code']}_{i}"
-
-                if booked:
-                    st.button(btn_label + " (Booked)", key=unique_key, disabled=True)
-                    if row['surgery']:
-                        st.caption(row['surgery'])
-                else:
-                    if st.button(btn_label, key=unique_key):
-                        show_booking_dialog(row.to_dict())
+                    if booked:
+                        st.button(btn_label + " (Booked)", key=unique_key, disabled=True)
+                        if row['surgery']:
+                            st.caption(row['surgery'])
+                    else:
+                        if st.button(btn_label, key=unique_key):
+                            show_booking_dialog(row.to_dict())
 
         st.divider()
 
