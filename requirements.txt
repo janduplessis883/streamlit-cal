@@ -4,3 +4,4 @@ google-auth-oauthlib
 pandas
 google-api-python-client
 google-auth-httplib2
+resend

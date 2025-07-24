@@ -4,6 +4,8 @@ from datetime import datetime, timedelta
 import gspread
 from google.oauth2.service_account import Credentials
 import time
+import os
+import resend
 
 # Google Sheet details
 SPREADSHEET_ID = "1m6fJqggnvRJ9u-Hk5keUaPZ_gJHrd4GZmowE3j3nH-c"
@@ -86,7 +88,7 @@ def delete_surgery_data(surgery_name, email_address):
         if cell:
             # Verify email matches to prevent accidental deletion if surgery names are not unique
             row_values = sheet.row_values(cell.row)
-            # Assuming 'surgery' is in column 1 and 'email' in column 2
+            # Assuming 'surgery' is in column A and 'email' in column B
             if len(row_values) >= 2 and row_values[1] == email_address:
                 sheet.delete_rows(cell.row)
                 st.success(f"Surgery '{surgery_name}' deleted successfully!")
@@ -97,6 +99,27 @@ def delete_surgery_data(surgery_name, email_address):
             st.error(f"Surgery '{surgery_name}' not found.")
     except Exception as e:
         st.error(f"An error occurred while deleting surgery data from Google Sheet: {e}")
+
+def delete_pharmacist_data(pharmacist_name, email_address):
+    """Delete a pharmacist entry from Google Sheet (Sheet3)"""
+    try:
+        sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME_PHARMACISTS)
+        # Find the row index of the pharmacist to delete
+        cell = sheet.find(pharmacist_name)
+        if cell:
+            # Verify email matches to prevent accidental deletion if names are not unique
+            row_values = sheet.row_values(cell.row)
+            # Assuming 'Name' is in column A and 'Email' in column B
+            if len(row_values) >= 2 and row_values[1] == email_address:
+                sheet.delete_rows(cell.row)
+                st.success(f"Pharmacist '{pharmacist_name}' deleted successfully!")
+                get_pharmacists_data.clear()
+            else:
+                st.error(f"Could not delete pharmacist: Email mismatch for '{pharmacist_name}'.")
+        else:
+            st.error(f"Pharmacist '{pharmacist_name}' not found.")
+    except Exception as e:
+        st.error(f"An error occurred while deleting pharmacist data from Google Sheet: {e}")
 
 @st.cache_data(ttl=1200) # Cache for 1 hour
 def get_pharmacists_data():
@@ -112,7 +135,7 @@ def get_pharmacists_data():
         # Create the worksheet if it doesn't exist
         sheet = client.open_by_key(SPREADSHEET_ID).add_worksheet(SHEET_NAME_PHARMACISTS, rows=1, cols=1)
         sheet.update([["Name", "Email"]]) # Add header
-        return pd.DataFrame(columns=["Name", "Emnail"])
+        return pd.DataFrame(columns=["Name", "Email"])
     except Exception as e:
         st.error(f"An error occurred while reading pharmacists data from Google Sheet: {e}")
         return pd.DataFrame()
@@ -124,8 +147,8 @@ def add_pharmacist_data(pharmacist_name, pharmacist_email):
         # Check if pharmacist already exists
         existing_data = sheet.get_all_records()
         for row in existing_data:
-            if row.get("Name") == pharmacist_name and row.get("Email") == pharmacist_email:
-                st.info(f"Pharmacist '{pharmacist_name}' with email '{pharmacist_email}' already exists.")
+            if row.get("Name") == pharmacist_name:
+                st.info(f"Pharmacist '{pharmacist_name}' already exists.")
                 return
 
         sheet.append_row([pharmacist_name, pharmacist_email])
@@ -134,8 +157,53 @@ def add_pharmacist_data(pharmacist_name, pharmacist_email):
     except Exception as e:
         st.error(f"An error occurred while adding pharmacist data to Google Sheet: {e}")
 
+def generate_ics_file(pharmacist_name, start_time, end_time, location):
+    """Generate an Outlook .ics file for the booking"""
+    ics_content = f"""BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Pharma-Cal//EN
+BEGIN:VEVENT
+SUMMARY:Pharmacist Booking - {pharmacist_name}
+DTSTART:{start_time.strftime('%Y%m%dT%H%M%S')}
+DTEND:{end_time.strftime('%Y%m%dT%H%M%S')}
+LOCATION:{location} - Remote Session
+DESCRIPTION:Pharmacist: {pharmacist_name}
+END:VEVENT
+END:VCALENDAR"""
+
+    file_path = f"pharmacist_booking_{start_time.strftime('%Y%m%d')}.ics"
+    with open(file_path, 'w') as f:
+        f.write(ics_content)
+    return file_path
+
+def send_resend_email(to_email, subject, html_content, attachment_path=None):
+    """Send email via Resend API"""
+    resend.api_key = "re_cJjyoNUq_6M1WHM9T76ofbvApaRrUz6eG"
+
+    if attachment_path:
+        with open(attachment_path, "rb") as f:
+            attachment_content = f.read()
+        attachment = {"filename": os.path.basename(attachment_path), "content": list(attachment_content)}
+    else:
+        attachment = None
+
+    params = {
+        "from": "Brompton Health PCN - Pharmacist Booking <hello@attribut.me>",
+        "to": to_email,
+        "subject": subject,
+        "html": html_content,
+        "attachments": [attachment] if attachment else [],
+    }
+
+    try:
+        resend.Emails.send(params)
+        return True
+    except Exception as e:
+        st.error(f"Error sending email: {e}")
+        return False
+
 def update_booking(slot, surgery, email):
-    """Update the Google Sheet with booking details"""
+    """Update the Google Sheet with booking details and send confirmation emails"""
     try:
         sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
         # Find the row based on unique_code
@@ -144,15 +212,60 @@ def update_booking(slot, surgery, email):
         if cell:
             # Get all headers to find column indices dynamically
             headers = sheet.row_values(1)
-            booked_col_idx = headers.index('booked') + 1
-            surgery_col_idx = headers.index('surgery') + 1
-            email_col_idx = headers.index('email') + 1
+            try:
+                booked_col_idx = headers.index('booked') + 1
+                surgery_col_idx = headers.index('surgery') + 1
+                email_col_idx = headers.index('email') + 1
+            except ValueError as e:
+                st.error(f"Missing required column in Google Sheet: {e}")
+                return
 
             # Update cells
             with st.spinner("Updating booking..."):
                 sheet.update_cell(cell.row, booked_col_idx, "TRUE")
                 sheet.update_cell(cell.row, surgery_col_idx, surgery)
                 sheet.update_cell(cell.row, email_col_idx, email)
+
+                # Get pharmacist details
+                pharmacist_name = slot.get('pharmacist_name', 'Pharmacist')
+                pharmacists_df = get_pharmacists_data()
+                pharmacist_row = pharmacists_df[pharmacists_df['Name'] == pharmacist_name]
+
+                if pharmacist_row.empty:
+                    st.error(f"Could not find email for pharmacist {pharmacist_name}")
+                    return
+                pharmacist_email = pharmacist_row['Email'].iloc[0]
+
+
+                # Generate ICS file
+                date = pd.to_datetime(slot['Date'])
+                start_time = date.replace(hour=9 if slot['am_pm'] == 'am' else 13)
+                end_time = date.replace(hour=12, minute=45) if slot['am_pm'] == 'am' else date.replace(hour=17)
+                ics_file = generate_ics_file(pharmacist_name, start_time, end_time, surgery)
+
+                # Email to surgery
+                surgery_html = f"""
+                <h2>Pharmacist Booking Confirmation</h2>
+                <p>You have booked <b>{pharmacist_name}</b> for:</p>
+                <p><strong>Date:</strong> {date.strftime('%A, %d %B %Y')}</p>
+                <p><strong>Time:</strong> {'09:00 - 12:45' if slot['am_pm'] == 'am' else '13:15 - 17:00'}</p>
+                <p>Please find attached the calendar invite.</p>
+                """
+                send_resend_email(email, f"Pharmacist Booking Confirmation - {date.strftime('%d/%m/%Y')}",
+                                surgery_html, ics_file)
+
+                # Email to pharmacist
+                pharmacist_html = f"""
+                <h2>New Surgery Booking Notification</h2>
+                <p>You have been booked for a session at:</p>
+                <p><strong>Surgery:</strong> {surgery}</p>
+                <p><strong>Date:</strong> {date.strftime('%A, %d %B %Y')}</p>
+                <p><strong>Time:</strong> {'09:00 - 12:45' if slot['am_pm'] == 'am' else '13:15 - 17:00'}</p>
+                <p><strong>Surgery Email:</strong> {email}</p>
+                """
+                send_resend_email(pharmacist_email, f"New Booking - {surgery} on {date.strftime('%d/%m/%Y')}",
+                                pharmacist_html)
+
         else:
             st.error("Could not find the slot in the Google Sheet.")
     except Exception as e:
@@ -187,7 +300,7 @@ def show_admin_panel(df):
                     df_copy['slot_index'] = df_copy.groupby(['Date', 'am_pm']).cumcount()
                 df_copy['Date'] = pd.to_datetime(df_copy['Date']).dt.date
                 for _, row in df_copy.iterrows():
-                    key = (row['Date'], row['slot_index'], row['am_pm'])
+                    key = (row['Date'], int(row['slot_index']), row['am_pm'])
                     current_availability[key] = {
                         'booked': str(row.get('booked', 'FALSE')).upper() == "TRUE",
                         'surgery': row.get('surgery', ''),
@@ -218,13 +331,23 @@ def show_admin_panel(df):
                                 is_booked = slot_info['booked']
 
                                 default_pharmacist = slot_info.get('pharmacist_name', 'None')
-                                if default_pharmacist not in pharmacist_names:
+
+                                # Create a temporary list of options for this specific selectbox
+                                current_options = list(pharmacist_names)
+
+                                if is_booked and default_pharmacist not in current_options:
+                                    # If the booked pharmacist is not in the main list (e.g., deleted),
+                                    # add them to the options for this dropdown to display correctly.
+                                    current_options.append(default_pharmacist)
+
+                                # If default_pharmacist is still not in the list (e.g. it's None), default to "None"
+                                if default_pharmacist not in current_options:
                                     default_pharmacist = "None"
 
                                 selected_pharmacist = st.selectbox(
                                     f"{shift_type.upper()} Slot",
-                                    pharmacist_names,
-                                    index=pharmacist_names.index(default_pharmacist),
+                                    current_options, # Use the potentially modified list
+                                    index=current_options.index(default_pharmacist),
                                     key=slot_key,
                                     disabled=is_weekend or is_booked
                                 )
@@ -300,7 +423,7 @@ def show_admin_panel(df):
     elif admin_tab == "Manage Pharmacists":
         st.sidebar.subheader("Add New Pharmacist")
         with st.sidebar.form("add_pharmacist_form", clear_on_submit=True):
-            new_pharmacist_name = st.text_input("Pharmacist Name (e.g., John Doe)")
+            new_pharmacist_name = st.text_input("Pharmacist Name")
             new_pharmacist_email = st.text_input("Pharmacist Email")
             add_pharmacist_submitted = st.form_submit_button("Add Pharmacist")
 
@@ -397,8 +520,14 @@ def display_calendar():
             else:
                 df['slot_index'] = df.groupby(['Date', 'am_pm']).cumcount()
 
-        if 'pharmacist_name' not in df.columns and 'pharm' in df.columns:
-             df['pharmacist_name'] = df['pharm']
+        if 'pharmacist_name' not in df.columns:
+            if 'pharm' in df.columns:
+                if pd.api.types.is_numeric_dtype(df['pharm']):
+                    df['pharmacist_name'] = df['pharm'].astype(str)
+                else:
+                    df['pharmacist_name'] = df['pharm']
+            else:
+                df['pharmacist_name'] = "Pharmacist"
 
     if password == "super user":
         show_admin_panel(df)
@@ -440,7 +569,7 @@ def display_calendar():
                     shift = row['am_pm'].upper()
                     booked = str(row['booked']).upper() == "TRUE"
 
-                    btn_label = "09:00 - 12:30" if shift == "AM" else "14:00 - 17:30"
+                    btn_label = "09:00 - 12:45" if shift == "AM" else "13:15 - 17:00"
                     unique_key = f"{row['unique_code']}_{row['pharmacist_name']}"
 
                     if booked:
