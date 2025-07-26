@@ -188,7 +188,7 @@ def send_resend_email(to_email, subject, html_content, attachment_path=None):
         attachment = None
 
     params = {
-        "from": "Brompton Health PCN - Pharmacist Booking <hello@attribut.me>",
+        "from": "Brompton Health PCN - Pharma-cal <hello@attribut.me>",
         "to": to_email,
         "subject": subject,
         "html": html_content,
@@ -201,6 +201,83 @@ def send_resend_email(to_email, subject, html_content, attachment_path=None):
     except Exception as e:
         st.error(f"Error sending email: {e}")
         return False
+
+def cancel_booking(slot):
+    """Cancel a booking, update the Google Sheet, and send cancellation emails."""
+    try:
+        sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
+        cell = sheet.find(slot['unique_code'])
+
+        if cell:
+            headers = sheet.row_values(1)
+            row_values = sheet.row_values(cell.row)
+
+            try:
+                # Get column indices
+                booked_col_idx = headers.index('booked') + 1
+                surgery_col_idx = headers.index('surgery') + 1
+                email_col_idx = headers.index('email') + 1
+                pharmacist_name_col_idx = headers.index('pharmacist_name') + 1
+                date_col_idx = headers.index('Date') + 1
+                am_pm_col_idx = headers.index('am_pm') + 1
+
+                # Get booking details from the sheet
+                surgery_name = row_values[surgery_col_idx - 1]
+                surgery_email = row_values[email_col_idx - 1]
+                pharmacist_name = row_values[pharmacist_name_col_idx - 1]
+                booking_date_str = row_values[date_col_idx - 1]
+                booking_am_pm = row_values[am_pm_col_idx - 1]
+
+                # Fetch pharmacist's email
+                pharmacists_df = get_pharmacists_data()
+                pharmacist_row = pharmacists_df[pharmacists_df['Name'] == pharmacist_name]
+                if pharmacist_row.empty:
+                    st.error(f"Could not find email for pharmacist {pharmacist_name}. Cancellation email to pharmacist not sent.")
+                    pharmacist_email = None
+                else:
+                    pharmacist_email = pharmacist_row['Email'].iloc[0]
+
+            except (ValueError, IndexError) as e:
+                st.error(f"Missing or incorrect column in Google Sheet: {e}")
+                return
+
+            with st.spinner("Cancelling booking and sending notifications..."):
+                # Clear booking info in the sheet
+                sheet.update_cell(cell.row, booked_col_idx, "FALSE")
+                sheet.update_cell(cell.row, surgery_col_idx, "")
+                sheet.update_cell(cell.row, email_col_idx, "")
+
+                # Prepare email content
+                booking_date = pd.to_datetime(booking_date_str).strftime('%A, %d %B %Y')
+                booking_time = '09:00 - 12:45' if booking_am_pm == 'am' else '13:15 - 17:00'
+
+                # Email to Surgery
+                if surgery_email:
+                    surgery_html = f"""
+                    <h2>Booking Cancellation Notice</h2>
+                    <p>The booking for <b>{pharmacist_name}</b> on <b>{booking_date}</b> at <b>{booking_time}</b> has been cancelled.</p>
+                    <p>This slot is now available again.</p>
+                    """
+                    send_resend_email(surgery_email, f"Booking Cancellation - {pharmacist_name} on {booking_date}", surgery_html)
+
+                # Email to Pharmacist
+                if pharmacist_email:
+                    pharmacist_html = f"""
+                    <h2>Booking Cancellation Notice</h2>
+                    <p>Your session at <b>{surgery_name}</b> on <b>{booking_date}</b> at <b>{booking_time}</b> has been cancelled.</p>
+                    <p>This slot is now available again.</p>
+                    """
+                    send_resend_email(pharmacist_email, f"Booking Cancellation - {surgery_name} on {booking_date}", pharmacist_html)
+
+
+            st.success("Booking cancelled successfully and notifications sent!")
+            time.sleep(1)
+            st.rerun()
+        else:
+            st.error("Could not find the slot to cancel.")
+    except Exception as e:
+        st.error(f"An error occurred while cancelling the booking: {e}")
+
 
 def update_booking(slot, surgery, email):
     """Update the Google Sheet with booking details and send confirmation emails"""
@@ -262,9 +339,10 @@ def update_booking(slot, surgery, email):
                 <p><strong>Date:</strong> {date.strftime('%A, %d %B %Y')}</p>
                 <p><strong>Time:</strong> {'09:00 - 12:45' if slot['am_pm'] == 'am' else '13:15 - 17:00'}</p>
                 <p><strong>Surgery Email:</strong> {email}</p>
+                <p>Please find attached the calendar invite.</p>
                 """
                 send_resend_email(pharmacist_email, f"New Booking - {surgery} on {date.strftime('%d/%m/%Y')}",
-                                pharmacist_html)
+                                pharmacist_html, ics_file)
 
         else:
             st.error("Could not find the slot in the Google Sheet.")
@@ -272,11 +350,13 @@ def update_booking(slot, surgery, email):
         st.error(f"An error occurred while updating the booking in Google Sheet: {e}")
 
 def show_admin_panel(df):
-
+    unbook_mode = False  # Default value
     admin_tab = st.sidebar.radio("Admin Options", ["Manage Availability", "Manage Surgeries", "Manage Pharmacists"])
 
     if admin_tab == "Manage Availability":
         st.sidebar.subheader("Manage Availability")
+        unbook_mode = st.sidebar.toggle("Unbook Mode", value=False)
+
         num_weeks = st.sidebar.slider("Number of weeks to show", 1, 12, 2)
 
         pharmacists_df = get_pharmacists_data()
@@ -446,6 +526,7 @@ def show_admin_panel(df):
                         st.rerun()
         else:
             st.sidebar.info("No pharmacists saved yet.")
+    return unbook_mode
 
 @st.dialog("Booking Details")
 def show_booking_dialog(slot):
@@ -504,7 +585,7 @@ def show_booking_dialog(slot):
 
 st.set_page_config(page_title="Pharma-Cal Brompton Heatlh PCN", layout="centered")
 
-def display_calendar():
+def display_calendar(unbook_mode=False):
     st.title("Request a Pharmacist Session :material/pill:")
     st.logo('noname.png', size="large")
     # --- Admin Sidebar ---
@@ -530,7 +611,7 @@ def display_calendar():
                 df['pharmacist_name'] = "Pharmacist"
 
     if password == "super user":
-        show_admin_panel(df)
+        unbook_mode = show_admin_panel(df)
     elif password != "":
         st.sidebar.error("Incorrect password")
 
@@ -572,13 +653,20 @@ def display_calendar():
                     btn_label = "09:00 - 12:45" if shift == "AM" else "13:15 - 17:00"
                     unique_key = f"{row['unique_code']}_{row['pharmacist_name']}"
 
-                    if booked:
-                        st.button(btn_label + " (Booked)", key=unique_key, disabled=True)
-                        if row['surgery']:
-                            st.caption(row['surgery'])
+                    if unbook_mode:
+                        if booked:
+                            if st.button(btn_label + " (Cancel)", key=unique_key):
+                                cancel_booking(row.to_dict())
+                        else:
+                            st.button(btn_label, key=unique_key, disabled=True)
                     else:
-                        if st.button(btn_label, key=unique_key):
-                            show_booking_dialog(row.to_dict())
+                        if booked:
+                            st.button(btn_label + " (Booked)", key=unique_key, disabled=True)
+                            if row['surgery']:
+                                st.caption(row['surgery'])
+                        else:
+                            if st.button(btn_label, key=unique_key):
+                                show_booking_dialog(row.to_dict())
 
         st.divider()
 
