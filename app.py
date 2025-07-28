@@ -357,7 +357,7 @@ def show_admin_panel(df):
         st.sidebar.subheader("Manage Availability")
         unbook_mode = st.sidebar.toggle("Unbook Mode", value=False)
 
-        num_weeks = st.sidebar.slider("Number of weeks to show", 1, 12, 2)
+        num_weeks = st.sidebar.slider("Number of weeks to show", 1, 12, 4)
 
         pharmacists_df = get_pharmacists_data()
         pharmacist_names = ["None"] + sorted(pharmacists_df["Name"].tolist()) if not pharmacists_df.empty else ["None"]
@@ -587,11 +587,12 @@ st.set_page_config(page_title="Pharma-Cal Brompton Heatlh PCN", layout="centered
 
 def display_calendar(unbook_mode=False):
     st.title("Request a Pharmacist Session :material/pill:")
-    st.logo('noname.png', size="large")
+    st.logo('logo223.png', size="large")
     # --- Admin Sidebar ---
-    st.sidebar.title(":material/settings: Admin Panel")
-    password = st.sidebar.text_input("Password", type="password")
 
+    password = st.sidebar.text_input("**Admin** Login", type="password")
+    if password == '':
+        st.sidebar.image('logo22.png')
     df = get_schedule_data()
 
     if not df.empty:
