@@ -6,6 +6,8 @@ This document outlines the specifications for the Streamlit Pharmacist Booking C
 
 The system uses Google Sheets as its database, making it easy for non-technical users to view and manage data directly if needed.
 
+![Pharm-cal](admin.png)
+
 ## 2. Core Features
 
 ### 2.1. User-Facing Features
