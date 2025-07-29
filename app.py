@@ -462,12 +462,44 @@ def show_admin_panel(df):
 
                 try:
                     sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
+                    
+                    # Get existing data
+                    existing_df = get_schedule_data()
+                    if not existing_df.empty:
+                        existing_df['Date'] = pd.to_datetime(existing_df['Date'])
+                    
+                        # Define the date range being edited
+                        start_date = dates_to_show[0]
+                        end_date = dates_to_show[-1]
+
+                        # Filter out the dates that are NOT in the editing window
+                        unaffected_df = existing_df[(existing_df['Date'] < start_date) | (existing_df['Date'] > end_date)]
+                    else:
+                        unaffected_df = pd.DataFrame()
+
+                    # Combine old and new data
+                    new_df = pd.DataFrame(new_df_data)
+                    if not new_df.empty:
+                        new_df['Date'] = pd.to_datetime(new_df['Date'])
+
+                    combined_df = pd.concat([unaffected_df, new_df], ignore_index=True)
+                    
+                    # Convert 'Date' back to string for writing to sheet
+                    if 'Date' in combined_df.columns:
+                        combined_df['Date'] = combined_df['Date'].dt.strftime('%Y-%m-%d')
+
+
                     with st.spinner("Updating availability..."):
                         sheet.clear()
-                        if new_df_data:
-                            headers = list(new_df_data[0].keys())
-                            data_to_write = [headers] + [[str(row.get(h, '')) for h in headers] for row in new_df_data]
+                        if not combined_df.empty:
+                            # Ensure all columns are strings before writing
+                            for col in combined_df.columns:
+                                combined_df[col] = combined_df[col].astype(str)
+                            
+                            headers = combined_df.columns.tolist()
+                            data_to_write = [headers] + combined_df.values.tolist()
                             sheet.update(data_to_write)
+
                     st.success("Availability updated in Google Sheet!")
                     st.rerun()
                 except Exception as e:
