@@ -443,67 +443,103 @@ def show_admin_panel(df):
 
             submitted = st.form_submit_button("Update Availability")
             if submitted:
-                new_df_data = []
-                for slot in selected_slots:
-                    was_booked = slot['booked_info']['booked']
-                    booked_surgery = slot['booked_info']['surgery'] if was_booked else ""
-                    booked_email = slot['booked_info']['email'] if was_booked else ""
-
-                    new_df_data.append({
-                        "unique_code": f"{int(slot['date'].timestamp())}-{slot['am_pm']}-{slot['pharm_id']}",
-                        "Date": slot['date'].strftime('%Y-%m-%d'),
-                        "am_pm": slot['am_pm'],
-                        "booked": "TRUE" if was_booked else "FALSE",
-                        "surgery": booked_surgery,
-                        "email": booked_email,
-                        "pharmacist_name": slot['pharmacist_name'],
-                        "slot_index": slot['pharm_id']
-                    })
-
+                EXPECTED_HEADERS = ["unique_code", "Date", "am_pm", "booked", "surgery", "email", "pharmacist_name", "slot_index"]
                 try:
                     sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
                     
-                    # Get existing data
-                    existing_df = get_schedule_data()
-                    if not existing_df.empty:
-                        existing_df['Date'] = pd.to_datetime(existing_df['Date'])
-                    
-                        # Define the date range being edited
-                        start_date = dates_to_show[0]
-                        end_date = dates_to_show[-1]
+                    try:
+                        headers = sheet.row_values(1)
+                        if not headers: # Check if the first row is empty
+                            sheet.update([EXPECTED_HEADERS])
+                            headers = EXPECTED_HEADERS
+                    except gspread.exceptions.APIError as e:
+                        # This can happen if the sheet is completely empty
+                        sheet.update([EXPECTED_HEADERS])
+                        headers = EXPECTED_HEADERS
 
-                        # Filter out the dates that are NOT in the editing window
-                        unaffected_df = existing_df[(existing_df['Date'] < start_date) | (existing_df['Date'] > end_date)]
-                    else:
-                        unaffected_df = pd.DataFrame()
+                    # Ensure all expected headers are present
+                    if not all(h in headers for h in EXPECTED_HEADERS):
+                        st.error("The sheet is missing required headers. Please check the sheet configuration.")
+                        st.stop()
 
-                    # Combine old and new data
-                    new_df = pd.DataFrame(new_df_data)
-                    if not new_df.empty:
-                        new_df['Date'] = pd.to_datetime(new_df['Date'])
+                    pharmacist_name_col_idx = headers.index('pharmacist_name') + 1
 
-                    combined_df = pd.concat([unaffected_df, new_df], ignore_index=True)
-                    
-                    # Convert 'Date' back to string for writing to sheet
-                    if 'Date' in combined_df.columns:
-                        combined_df['Date'] = combined_df['Date'].dt.strftime('%Y-%m-%d')
+                    with st.spinner("Updating availability... This may take a moment."):
+                        for date in dates_to_show:
+                            if date.weekday() >= 5: continue
+
+                            for i in range(2): # Number of pharmacist columns
+                                for shift_type in ['am', 'pm']:
+                                    slot_key = f"avail_{date.strftime('%Y%m%d')}_{shift_type}_{i}"
+                                    lookup_key = (date.date(), i, shift_type)
+
+                                    slot_info = current_availability.get(lookup_key, {})
+                                    original_pharmacist = slot_info.get('pharmacist_name', 'None')
+                                    new_pharmacist = st.session_state.get(slot_key, 'None')
+
+                                    if slot_info.get('booked', False):
+                                        continue
+
+                                    if new_pharmacist != original_pharmacist:
+                                        unique_code = slot_info.get('unique_code') or f"{int(date.timestamp())}-{shift_type}-{i}"
+
+                                        # Find cell for existing entries (deletion or modification)
+                                        cell_to_modify = None
+                                        if original_pharmacist != 'None' and unique_code:
+                                            try:
+                                                cell_to_modify = sheet.find(unique_code)
+                                            except gspread.exceptions.CellNotFound:
+                                                # This can happen if data is out of sync. We can proceed as if it wasn't there.
+                                                pass
+
+                                        # Case 1: Deletion
+                                        if new_pharmacist == 'None':
+                                            if cell_to_modify:
+                                                sheet.delete_rows(cell_to_modify.row)
+
+                                        # Case 2: Addition
+                                        elif original_pharmacist == 'None':
+                                            new_row_data = {
+                                                "unique_code": unique_code,
+                                                "Date": date.strftime('%Y-%m-%d'),
+                                                "am_pm": shift_type,
+                                                "booked": "FALSE",
+                                                "surgery": "",
+                                                "email": "",
+                                                "pharmacist_name": new_pharmacist,
+                                                "slot_index": i
+                                            }
+                                            # Build the row in the correct order based on sheet headers
+                                            ordered_row_values = [new_row_data.get(h, "") for h in headers]
+                                            sheet.append_row(ordered_row_values, value_input_option='USER_ENTERED')
+
+                                        # Case 3: Modification
+                                        else:
+                                            if cell_to_modify:
+                                                sheet.update_cell(cell_to_modify.row, pharmacist_name_col_idx, new_pharmacist)
+                                            else:
+                                                # The original entry was not found, so treat it as an addition
+                                                st.warning(f"Could not find slot {unique_code} to modify. Adding it as a new entry.")
+                                                new_row_data = {
+                                                    "unique_code": unique_code,
+                                                    "Date": date.strftime('%Y-%m-%d'),
+                                                    "am_pm": shift_type,
+                                                    "booked": "FALSE",
+                                                    "surgery": "",
+                                                    "email": "",
+                                                    "pharmacist_name": new_pharmacist,
+                                                    "slot_index": i
+                                                }
+                                                ordered_row_values = [new_row_data.get(h, "") for h in headers]
+                                                sheet.append_row(ordered_row_values, value_input_option='USER_ENTERED')
 
 
-                    with st.spinner("Updating availability..."):
-                        sheet.clear()
-                        if not combined_df.empty:
-                            # Ensure all columns are strings before writing
-                            for col in combined_df.columns:
-                                combined_df[col] = combined_df[col].astype(str)
-                            
-                            headers = combined_df.columns.tolist()
-                            data_to_write = [headers] + combined_df.values.tolist()
-                            sheet.update(data_to_write)
-
-                    st.success("Availability updated in Google Sheet!")
+                    st.success("Availability updated successfully!")
+                    time.sleep(1)
                     st.rerun()
+
                 except Exception as e:
-                    st.error(f"Error updating availability in Google Sheet: {e}")
+                    st.error(f"An error occurred while updating availability: {e}")
 
     elif admin_tab == "Manage Surgeries":
         st.sidebar.subheader("Add New Surgery")
