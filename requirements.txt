@@ -5,3 +5,4 @@ pandas
 google-api-python-client
 google-auth-httplib2
 resend
+plotly

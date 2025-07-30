@@ -50,18 +50,21 @@ def get_surgeries_data():
         with st.spinner("Fetching surgeries data..."):
             data = sheet.get_all_records()
         df = pd.DataFrame(data)
+        # Ensure list_size is numeric, coercing errors
+        if 'list_size' in df.columns:
+            df['list_size'] = pd.to_numeric(df['list_size'], errors='coerce').fillna(0)
         return df
     except gspread.exceptions.WorksheetNotFound:
         st.warning(f"Worksheet '{SHEET_NAME_SURGERIES}' not found. Creating it...")
         # Create the worksheet if it doesn't exist
-        sheet = client.open_by_key(SPREADSHEET_ID).add_worksheet(SHEET_NAME_SURGERIES, rows=1, cols=2)
-        sheet.update([["surgery", "email"]]) # Add headers
-        return pd.DataFrame(columns=["surgery", "email"])
+        sheet = client.open_by_key(SPREADSHEET_ID).add_worksheet(SHEET_NAME_SURGERIES, rows=1, cols=3)
+        sheet.update([["surgery", "email", "list_size"]]) # Add headers
+        return pd.DataFrame(columns=["surgery", "email", "list_size"])
     except Exception as e:
         st.error(f"An error occurred while reading surgeries data from Google Sheet: {e}")
         return pd.DataFrame()
 
-def add_surgery_data(surgery_name, email_address):
+def add_surgery_data(surgery_name, email_address, list_size):
     """Add a new surgery and email to Google Sheet (Sheet2)"""
     try:
         sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME_SURGERIES)
@@ -72,7 +75,7 @@ def add_surgery_data(surgery_name, email_address):
                 st.info(f"Surgery '{surgery_name}' with email '{email_address}' already exists.")
                 return
 
-        sheet.append_row([surgery_name, email_address])
+        sheet.append_row([surgery_name, email_address, list_size])
         st.success(f"Surgery '{surgery_name}' added successfully!")
         get_surgeries_data.clear() # Clear cache to refresh data
     except Exception as e:
@@ -351,7 +354,12 @@ def update_booking(slot, surgery, email):
 
 def show_admin_panel(df):
     unbook_mode = False  # Default value
-    admin_tab = st.sidebar.radio("Admin Options", ["Manage Availability", "Manage Surgeries", "Manage Pharmacists"])
+    admin_tab = st.sidebar.radio("Admin Options", ["Manage Availability", "Manage Surgeries", "Manage Pharmacists", "Surgery Session Plots"])
+
+    if admin_tab == "Surgery Session Plots":
+        st.session_state.view = 'plot'
+    else:
+        st.session_state.view = 'calendar'
 
     if admin_tab == "Manage Availability":
         st.sidebar.subheader("Manage Availability")
@@ -446,7 +454,7 @@ def show_admin_panel(df):
                 EXPECTED_HEADERS = ["unique_code", "Date", "am_pm", "booked", "surgery", "email", "pharmacist_name", "slot_index"]
                 try:
                     sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
-                    
+
                     try:
                         headers = sheet.row_values(1)
                         if not headers: # Check if the first row is empty
@@ -546,11 +554,12 @@ def show_admin_panel(df):
         with st.sidebar.form("add_surgery_form", clear_on_submit=True):
             new_surgery_name = st.text_input("Surgery Name")
             new_surgery_email = st.text_input("Email Address")
+            new_list_size = st.number_input("List Size", min_value=0, step=1)
             add_surgery_submitted = st.form_submit_button("Add Surgery")
 
             if add_surgery_submitted:
                 if new_surgery_name and new_surgery_email:
-                    add_surgery_data(new_surgery_name, new_surgery_email)
+                    add_surgery_data(new_surgery_name, new_surgery_email, new_list_size)
                 else:
                     st.error("Both surgery name and email are required.")
 
@@ -594,6 +603,10 @@ def show_admin_panel(df):
                         st.rerun()
         else:
             st.sidebar.info("No pharmacists saved yet.")
+    elif admin_tab == "Surgery Session Plots":
+        st.sidebar.subheader("Surgery Session Plots")
+        st.session_state.plot_type = st.sidebar.radio("Select Plot Type", ["Absolute Session Plot", "Normalized Sessions per 1000 pts"])
+
     return unbook_mode
 
 @st.dialog("Booking Details")
@@ -651,7 +664,73 @@ def show_booking_dialog(slot):
         if cancel_button:
             st.rerun() # Rerun to close dialog
 
+import plotly.express as px
+
 st.set_page_config(page_title="Pharma-Cal Brompton Heatlh PCN", layout="centered")
+
+def display_plot(df):
+    st.subheader("Surgery Session Distribution")
+
+    plot_type = st.session_state.get('plot_type', "Absolute Session Plot")
+
+    # Ensure the DataFrame is not empty and contains required columns
+    if df.empty or 'surgery' not in df.columns:
+        st.info("No data available to display the plot.")
+        return
+
+    # Filter out rows where surgery is not specified or empty
+    plot_df = df[df['surgery'].notna() & (df['surgery'] != '')].copy()
+
+    if plot_df.empty:
+        st.info("No booked sessions with surgery information available.")
+        return
+
+    # Count sessions per surgery
+    surgery_counts = plot_df['surgery'].value_counts().reset_index()
+    surgery_counts.columns = ['Surgery', 'Number of Sessions']
+
+    if plot_type == "Normalized Sessions per 1000 pts":
+        surgeries_df = get_surgeries_data()
+        if surgeries_df.empty or 'list_size' not in surgeries_df.columns:
+            st.warning("List size information is not available. Please add it in the 'Manage Surgeries' section.")
+            return
+
+        # Merge dataframes to get list sizes
+        merged_df = pd.merge(surgery_counts, surgeries_df, left_on='Surgery', right_on='surgery', how='left')
+        merged_df['list_size'] = merged_df['list_size'].replace(0, 1) # Avoid division by zero
+        merged_df['Normalized Sessions'] = (merged_df['Number of Sessions'] / merged_df['list_size']) * 1000
+
+        fig = px.bar(
+            merged_df,
+            x='Surgery',
+            y='Normalized Sessions',
+            title='Normalized Sessions per 1000 Patients',
+            color='Surgery',
+            template='plotly_white'
+        )
+        fig.update_layout(
+            xaxis_title="Surgery",
+            yaxis_title="Sessions per 1000 Patients",
+            showlegend=False,
+            xaxis_tickangle=-45
+        )
+    else: # Absolute Session Plot
+        fig = px.bar(
+            surgery_counts,
+            x='Surgery',
+            y='Number of Sessions',
+            title='Number of Sessions per Surgery',
+            color='Surgery',  # Color bars by surgery name
+            template='plotly_white', # Use a clean, modern template
+        )
+        fig.update_layout(
+            xaxis_title="Surgery",
+            yaxis_title="Number of Sessions",
+            showlegend=False, # Hide legend as colors are self-explanatory
+            xaxis_tickangle=-45 # Angle the x-axis labels for better readability
+        )
+
+    st.plotly_chart(fig, use_container_width=True)
 
 def display_calendar(unbook_mode=False):
     st.title("Request a Pharmacist Session :material/pill:")
@@ -662,6 +741,9 @@ def display_calendar(unbook_mode=False):
     if password == '':
         st.sidebar.image('logo22.png')
     df = get_schedule_data()
+
+    if 'view' not in st.session_state:
+        st.session_state.view = 'calendar'
 
     if not df.empty:
         if 'slot_index' not in df.columns:
@@ -683,6 +765,10 @@ def display_calendar(unbook_mode=False):
         unbook_mode = show_admin_panel(df)
     elif password != "":
         st.sidebar.error("Incorrect password")
+
+    if st.session_state.view == 'plot':
+        display_plot(df)
+        return
 
     # --- Main Calendar Display ---
     if df.empty:
