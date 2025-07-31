@@ -181,7 +181,7 @@ END:VCALENDAR"""
 
 def send_resend_email(to_email, subject, html_content, attachment_path=None):
     """Send email via Resend API"""
-    resend.api_key = "re_cJjyoNUq_6M1WHM9T76ofbvApaRrUz6eG"
+    resend.api_key = st.secrets["RESEND_API_KEY"]
 
     if attachment_path:
         with open(attachment_path, "rb") as f:
@@ -745,7 +745,7 @@ def display_calendar(unbook_mode=False):
 
 
 
-    st.html("<div class='status' style='background-color: #3982c2; color: #fafafa; padding-top: 6px; padding-bottom: 6px; padding-left: 20px; padding-right: 20px; border-radius: 10px; font-family: Arial, sans-serif; font-size: 26px; display: inline-block; text-align: center; box-shadow: 0px 1px 2px rgba(0, 0, 0, 0.5);'>Request a <b>Pharmacist Session</b> - BH PCN</B></div>")
+    st.html("<div class='status' style='background-color: #3982c2; color: #fafafa; padding-top: 6px; padding-bottom: 6px; padding-left: 20px; padding-right: 20px; border-radius: 10px; font-family: Arial, sans-serif; font-size: 26px; display: inline-block; text-align: center; box-shadow: 0px 2px 3px rgba(0, 0, 0, 0.5);'>Request a <b>Pharmacist Session</b> - BH PCN</B></div>")
     st.logo('images/logo223.png', size="large")
     # --- Admin Sidebar ---
 
@@ -773,7 +773,7 @@ def display_calendar(unbook_mode=False):
             else:
                 df['pharmacist_name'] = "Pharmacist"
 
-    if password == "super user":
+    if password == st.secrets["admin_password"]:
         unbook_mode = show_admin_panel(df)
     elif password != "":
         st.sidebar.error("Incorrect password")
