@@ -404,7 +404,7 @@ def show_admin_panel(df):
                 date_str = date.strftime('%A, %d %B')
 
                 if is_weekend:
-                    st.markdown(f"**{date_str} (Weekend)**")
+                    st.markdown(f":orange[{date_str} (Weekend)]")
                 else:
                     st.markdown(f"**{date_str}**")
 
@@ -733,13 +733,25 @@ def display_plot(df):
     st.plotly_chart(fig, use_container_width=True)
 
 def display_calendar(unbook_mode=False):
-    st.title("Request a Pharmacist Session :material/pill:")
-    st.logo('logo223.png', size="large")
+    c1, c2 = st.columns([0.2,2], gap="small")
+    with c1:
+        with st.popover(':material/info:'):
+            st.image('images/userguide.png')
+    with c2:
+        with st.popover(':material/event:'):
+            st.markdown(':material/event_available: 2025 Communal Sessions **Release Schedule**')
+            release = pd.read_csv('data/release.csv')
+            st.dataframe(release, width=400, height=700, hide_index=True)
+
+
+
+    st.html("<div class='status' style='background-color: #3982c2; color: #fafafa; padding-top: 6px; padding-bottom: 6px; padding-left: 20px; padding-right: 20px; border-radius: 10px; font-family: Arial, sans-serif; font-size: 26px; display: inline-block; text-align: center; box-shadow: 0px 1px 2px rgba(0, 0, 0, 0.5);'>Request a <b>Pharmacist Session</b> - BH PCN</B></div>")
+    st.logo('images/logo223.png', size="large")
     # --- Admin Sidebar ---
 
-    password = st.sidebar.text_input("**Admin** Login", type="password")
+    password = st.sidebar.text_input("", type="password", placeholder="Admin Login", label_visibility="collapsed", icon=":material/settings:")  # Admin password input
     if password == '':
-        st.sidebar.image('logo22.png')
+        st.sidebar.image('images/logo22.png')
     df = get_schedule_data()
 
     if 'view' not in st.session_state:
