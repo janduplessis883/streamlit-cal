@@ -666,7 +666,7 @@ def show_booking_dialog(slot):
 
 import plotly.express as px
 
-st.set_page_config(page_title="Pharma-Cal Brompton Heatlh PCN", layout="centered")
+st.set_page_config(page_title="Pharma-Cal Brompton Heatlh PCN", layout="centered", page_icon=":material/pill:")
 
 def display_plot(df):
     st.subheader("Surgery Session Distribution")
