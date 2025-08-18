@@ -63,7 +63,7 @@ This is a Streamlit web application that provides a simple and interactive calen
 
 ## Admin Access
 
-To access the admin panel, use the password `super user` in the sidebar.
+To access the admin panel, use the password.
 
 ## Dependencies
 
