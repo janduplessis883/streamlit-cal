@@ -2,7 +2,7 @@
 
 This is a Streamlit web application that provides a simple and interactive calendar system for booking pharmacist sessions. The application uses Google Sheets as a backend to store and manage availability, bookings, and related data like surgeries and pharmacists.
 
-![Pharm-cal](admin.png)
+![Pharm-cal](images/admin.png)
 
 ## Features
 
