@@ -699,8 +699,8 @@ def display_plot(df):
         merged_df = pd.merge(surgery_counts, surgeries_df, left_on='Surgery', right_on='surgery', how='left')
         merged_df['list_size'] = merged_df['list_size'].replace(0, 1) # Avoid division by zero
         merged_df['Normalized Sessions'] = (merged_df['Number of Sessions'] / merged_df['list_size']) * 1000
-
-        fig = px.bar(
+        mean_sessions = merged_df['Normalized Sessions'].mean()
+        fig2 = px.bar(
             merged_df,
             x='Surgery',
             y='Normalized Sessions',
@@ -708,14 +708,22 @@ def display_plot(df):
             color='Surgery',
             template='plotly_white'
         )
-        fig.update_layout(
+        fig2.update_layout(
             xaxis_title="Surgery",
             yaxis_title="Sessions per 1000 Patients",
             showlegend=False,
             xaxis_tickangle=-45
         )
+        fig2.add_hline(
+            y=mean_sessions,
+            line_dash="dash",
+            line_width=0.8,
+            line_color="#ae4f4d",
+            annotation_text=f"Mean: {mean_sessions:.2f}",
+            annotation_position="top right"
+        )
     else: # Absolute Session Plot
-        fig = px.bar(
+        fig2 = px.bar(
             surgery_counts,
             x='Surgery',
             y='Number of Sessions',
@@ -723,25 +731,69 @@ def display_plot(df):
             color='Surgery',  # Color bars by surgery name
             template='plotly_white', # Use a clean, modern template
         )
-        fig.update_layout(
+        fig2.update_layout(
             xaxis_title="Surgery",
             yaxis_title="Number of Sessions",
             showlegend=False, # Hide legend as colors are self-explanatory
             xaxis_tickangle=-45 # Angle the x-axis labels for better readability
         )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig2, use_container_width=True, key="surgery_plot")
 
 def display_calendar(unbook_mode=False):
-    c1, c2 = st.columns([0.2,2], gap="small")
+    c1, c2, c3 = st.columns([0.25, 0.25, 2], gap="small")
     with c1:
         with st.popover(':material/info:'):
             st.image('images/userguide.png')
-    with c2:
+    with c3:
         with st.popover(':material/event:'):
             st.markdown(':material/event_available: 2025 Communal Sessions **Release Schedule**')
             release = pd.read_csv('data/release.csv')
             st.dataframe(release, width=400, height=700, hide_index=True)
+    with c2:
+        with st.popover(':material/bar_chart:'):
+            with st.container(width=700):
+                df = get_schedule_data()
+                plot_df = df[df['surgery'].notna() & (df['surgery'] != '')].copy()
+                surgery_counts = plot_df['surgery'].value_counts().reset_index()
+                surgery_counts.columns = ['Surgery', 'Number of Sessions']
+                surgeries_df = get_surgeries_data()
+                if surgeries_df.empty or 'list_size' not in surgeries_df.columns:
+                    st.warning("List size information is not available. Please add it in the 'Manage Surgeries' section.")
+                    return
+
+                # Merge dataframes to get list sizes
+                merged_df = pd.merge(surgery_counts, surgeries_df, left_on='Surgery', right_on='surgery', how='left')
+                merged_df['list_size'] = merged_df['list_size'].replace(0, 1) # Avoid division by zero
+                merged_df['Normalized Sessions'] = (merged_df['Number of Sessions'] / merged_df['list_size']) * 1000
+
+                mean_sessions = merged_df['Normalized Sessions'].mean()
+
+                fig = px.bar(
+                    merged_df,
+                    x='Surgery',
+                    y='Normalized Sessions',
+                    title='Normalized Sessions per 1000 Patients',
+                    color='Surgery',
+                    template='plotly_white'
+                )
+                fig.update_layout(
+                    xaxis_title="Surgery",
+                    yaxis_title="Sessions per 1000 Patients",
+                    showlegend=False,
+                    xaxis_tickangle=-45
+                )
+                # Add horizontal line at mean_sessions
+                fig.add_hline(
+                    y=mean_sessions,
+                    line_dash="dash",
+                    line_width=0.8,
+                    line_color="#ae4f4d",
+                    annotation_text=f"Mean: {mean_sessions:.2f}",
+                    annotation_position="top right"
+                )
+                st.plotly_chart(fig, use_container_width=True, key="user_plot")
+
 
 
 
