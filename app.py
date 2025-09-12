@@ -2,16 +2,22 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 import gspread
+from gspread.utils import ValueInputOption # Import ValueInputOption from gspread.utils
 from google.oauth2.service_account import Credentials
 import time
 import os
 import resend
+import uuid # Import uuid for generating unique IDs
+from typing import Any # Import Any for type hinting
+import plotly.express as px
+
 
 # Google Sheet details
 SPREADSHEET_ID = "1m6fJqggnvRJ9u-Hk5keUaPZ_gJHrd4GZmowE3j3nH-c"
 SHEET_NAME = "Sheet1"
 SHEET_NAME_SURGERIES = "Sheet2"
 SHEET_NAME_PHARMACISTS = "Sheet3"
+SHEET_NAME_COVER_REQUESTS = "cover_request" # New sheet for cover requests
 
 
 # Authenticate with Google Sheets using st.secrets
@@ -41,6 +47,55 @@ def get_schedule_data():
     except Exception as e:
         st.error(f"An error occurred while reading data from Google Sheet: {e}")
         return pd.DataFrame()
+
+@st.cache_data(ttl=3600) # Cache for 1 hour
+def get_cover_requests_data():
+    """Fetch cover request data from Google Sheet (cover_request)"""
+    try:
+        sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME_COVER_REQUESTS)
+        with st.spinner("Fetching cover requests..."):
+            data = sheet.get_all_records()
+
+        # If data is empty, create an empty DataFrame with expected columns
+        if not data:
+            df = pd.DataFrame(columns=["uuid", "cover_date", "surgery", "name", "desc", "submission_timestamp"])
+        else:
+            df = pd.DataFrame(data)
+
+        # Ensure cover_date and submission_timestamp are datetime objects
+        if 'cover_date' in df.columns:
+            df['cover_date'] = pd.to_datetime(df['cover_date'], errors='coerce')
+        if 'submission_timestamp' in df.columns:
+            df['submission_timestamp'] = pd.to_datetime(df['submission_timestamp'], errors='coerce')
+
+        # Ensure the DataFrame always has the expected columns, even if empty
+        expected_columns = ["uuid", "cover_date", "surgery", "name", "desc", "submission_timestamp"]
+        for col in expected_columns:
+            if col not in df.columns:
+                df[col] = None # Add missing columns
+
+        return df
+    except gspread.exceptions.WorksheetNotFound:
+        st.warning(f"Worksheet '{SHEET_NAME_COVER_REQUESTS}' not found. Creating it...")
+        sheet = client.open_by_key(SPREADSHEET_ID).add_worksheet(SHEET_NAME_COVER_REQUESTS, rows=1, cols=6)
+        sheet.update([["uuid", "cover_date", "surgery", "name", "desc", "submission_timestamp"]])
+        # Return a DataFrame with expected columns after creating the sheet
+        return pd.DataFrame(columns=["uuid", "cover_date", "surgery", "name", "desc", "submission_timestamp"])
+    except Exception as e:
+        st.error(f"An error occurred while reading cover requests data from Google Sheet: {e}")
+        return pd.DataFrame(columns=["uuid", "cover_date", "surgery", "name", "desc", "submission_timestamp"]) # Ensure columns are always returned
+
+def add_cover_request_data(cover_date, surgery, name, desc):
+    """Add a new cover request to Google Sheet (cover_request)"""
+    try:
+        sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME_COVER_REQUESTS)
+        new_uuid = str(uuid.uuid4())
+        submission_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        sheet.append_row([new_uuid, cover_date.strftime('%Y-%m-%d'), surgery, name, desc, submission_timestamp])
+        st.success("Cover request submitted successfully!")
+        get_cover_requests_data.clear() # Clear cache to refresh data
+    except Exception as e:
+        st.error(f"An error occurred while adding cover request data to Google Sheet: {e}")
 
 @st.cache_data(ttl=3600) # Cache for 1 hour
 def get_surgeries_data():
@@ -190,7 +245,7 @@ def send_resend_email(to_email, subject, html_content, attachment_path=None):
     else:
         attachment = None
 
-    params = {
+    params: dict[str, Any] = { # Explicitly type params as dict[str, Any]
         "from": "Brompton Health PCN - Pharma-cal <hello@attribut.me>",
         "to": to_email,
         "subject": subject,
@@ -199,7 +254,7 @@ def send_resend_email(to_email, subject, html_content, attachment_path=None):
     }
 
     try:
-        resend.Emails.send(params)
+        resend.Emails.send(params) # Pylance might still complain, but this is a common workaround
         return True
     except Exception as e:
         st.error(f"Error sending email: {e}")
@@ -354,10 +409,12 @@ def update_booking(slot, surgery, email):
 
 def show_admin_panel(df):
     unbook_mode = False  # Default value
-    admin_tab = st.sidebar.radio("Admin Options", ["Manage Availability", "Manage Surgeries", "Manage Pharmacists", "Surgery Session Plots"])
+    admin_tab = st.sidebar.radio("Admin Options", ["Manage Availability", "View Future Requests", "Manage Surgeries", "Manage Pharmacists", "Surgery Session Plots"])
 
     if admin_tab == "Surgery Session Plots":
         st.session_state.view = 'plot'
+    elif admin_tab == "View Future Requests":
+        st.session_state.view = 'future_requests'
     else:
         st.session_state.view = 'calendar'
 
@@ -496,7 +553,7 @@ def show_admin_panel(df):
                                         if original_pharmacist != 'None' and unique_code:
                                             try:
                                                 cell_to_modify = sheet.find(unique_code)
-                                            except gspread.exceptions.CellNotFound:
+                                            except gspread.exceptions.APIError as e: # Changed to gspread.exceptions.APIError
                                                 # This can happen if data is out of sync. We can proceed as if it wasn't there.
                                                 pass
 
@@ -519,7 +576,7 @@ def show_admin_panel(df):
                                             }
                                             # Build the row in the correct order based on sheet headers
                                             ordered_row_values = [new_row_data.get(h, "") for h in headers]
-                                            sheet.append_row(ordered_row_values, value_input_option='USER_ENTERED')
+                                            sheet.append_row(ordered_row_values, value_input_option=ValueInputOption.raw)
 
                                         # Case 3: Modification
                                         else:
@@ -539,7 +596,7 @@ def show_admin_panel(df):
                                                     "slot_index": i
                                                 }
                                                 ordered_row_values = [new_row_data.get(h, "") for h in headers]
-                                                sheet.append_row(ordered_row_values, value_input_option='USER_ENTERED')
+                                                sheet.append_row(ordered_row_values, value_input_option=ValueInputOption.raw)
 
 
                     st.success("Availability updated successfully!")
@@ -606,6 +663,24 @@ def show_admin_panel(df):
     elif admin_tab == "Surgery Session Plots":
         st.sidebar.subheader("Surgery Session Plots")
         st.session_state.plot_type = st.sidebar.radio("Select Plot Type", ["Absolute Session Plot", "Normalized Sessions per 1000 pts"])
+    elif admin_tab == "View Future Requests":
+        st.header(":material/event_upcoming: Future Cover Requests")
+        st.sidebar.subheader("Future Cover Requests")
+        cover_requests_df = get_cover_requests_data()
+
+        if not cover_requests_df.empty:
+            # Filter for requests from today and the future
+            today = datetime.today().date()
+            future_requests = cover_requests_df[
+                (cover_requests_df['cover_date'].dt.date >= today)
+            ].sort_values(by='cover_date')
+
+            if not future_requests.empty:
+                st.dataframe(future_requests[['cover_date', 'surgery', 'name', 'desc', 'submission_timestamp']], use_container_width=True)
+            else:
+                st.info("No future cover requests found.")
+        else:
+            st.info("No cover requests submitted yet.")
 
     return unbook_mode
 
@@ -653,18 +728,59 @@ def show_booking_dialog(slot):
                 st.error("All fields are required.")
             else:
                 # If a new surgery was added, save it to Sheet2
+                # Removed add_surgery_data call from here as it's meant for admin panel
+                # If selected_surgery_option is "Add New Surgery", the user should be directed to admin panel
+                # or a separate flow for adding new surgeries.
                 if selected_surgery_option == "Add New Surgery":
-                    add_surgery_data(current_surgery, current_email)
+                    st.error("Please add new surgeries via the Admin Panel before booking.")
+                else:
+                    update_booking(slot, current_surgery, current_email)
+                    st.success("Booking saved successfully!")
+                    time.sleep(1.5)
+                    st.rerun() # Rerun to close dialog and refresh main app
 
-                update_booking(slot, current_surgery, current_email)
-                st.success("Booking saved successfully!")
-                time.sleep(1.5)
+        if cancel_button:
+            st.rerun() # Rerun to close dialog
+
+@st.dialog("Request Cover")
+def show_cover_request_dialog(cover_date):
+    st.markdown(f"Requesting cover for: **{cover_date.strftime('%A, %d %B %Y')}**")
+
+    surgeries_df = get_surgeries_data()
+    surgery_names = sorted(surgeries_df["surgery"].tolist()) if not surgeries_df.empty else []
+
+    with st.form(key=f"form_cover_request_{cover_date.strftime('%Y%m%d')}"):
+        selected_surgery = st.selectbox(
+            "Select Surgery",
+            [""] + surgery_names, # Add an empty option for initial selection
+            key=f"cover_surgery_{cover_date.strftime('%Y%m%d')}"
+        )
+        requested_by_name = st.text_input(
+            "Requested by (Your Name)",
+            key=f"cover_name_{cover_date.strftime('%Y%m%d')}"
+        )
+        description = st.text_area(
+            "Description (e.g., AM/PM, specific needs)",
+            key=f"cover_desc_{cover_date.strftime('%Y%m%d')}",
+            help="Provide details about the cover needed, this will not be displayed on the page."
+        )
+
+        col1, col2 = st.columns(2)
+        submitted = col1.form_submit_button("Submit Request")
+        cancel_button = col2.form_submit_button("Cancel")
+
+        if submitted:
+            if not selected_surgery or not requested_by_name or not description:
+                st.error("All fields are required.")
+            else:
+                add_cover_request_data(cover_date, selected_surgery, requested_by_name, description)
+                time.sleep(0.2)
                 st.rerun() # Rerun to close dialog and refresh main app
 
         if cancel_button:
             st.rerun() # Rerun to close dialog
 
-import plotly.express as px
+
 
 st.set_page_config(page_title="Pharma-Cal Brompton Heatlh PCN", layout="centered", page_icon=":material/pill:")
 
@@ -797,7 +913,7 @@ def display_calendar(unbook_mode=False):
 
 
 
-    st.html("<div class='status' style='background-color: #3982c2; color: #fafafa; padding-top: 6px; padding-bottom: 6px; padding-left: 20px; padding-right: 20px; border-radius: 10px; font-family: Arial, sans-serif; font-size: 26px; display: inline-block; text-align: center; box-shadow: 0px 2px 3px rgba(0, 0, 0, 0.5);'>Request a <b>Pharmacist Session</b> - BH PCN</B></div>")
+
     st.logo('images/logo223.png', size="large")
     # --- Admin Sidebar ---
 
@@ -833,8 +949,12 @@ def display_calendar(unbook_mode=False):
     if st.session_state.view == 'plot':
         display_plot(df)
         return
+    elif st.session_state.view == 'future_requests':
+        # The display logic is handled within show_admin_panel for this view
+        return
 
     # --- Main Calendar Display ---
+    st.html("<div class='status' style='background-color: #3982c2; color: #fafafa; padding-top: 6px; padding-bottom: 6px; padding-left: 20px; padding-right: 20px; border-radius: 10px; font-family: Arial, sans-serif; font-size: 26px; display: inline-block; text-align: center; box-shadow: 0px 2px 3px rgba(0, 0, 0, 0.5);'>Request a <b>Pharmacist Session</b> - BH PCN</B></div>")
     if df.empty:
         st.info("No pharmacist shifts have been scheduled yet. Contact admin.")
         return
@@ -846,16 +966,20 @@ def display_calendar(unbook_mode=False):
 
     if upcoming.empty:
         st.info("No upcoming shifts available.")
-        return
+        last_advertised_date = datetime.today().date() # If no upcoming, start from today
+    else:
+        last_advertised_date = upcoming['Date'].max().date()
 
+    # Display existing pharmacist schedule
     for date, daily in upcoming.groupby(df['Date'].dt.date):
-        if date.weekday() >= 5:
+        if date.weekday() >= 5: # Skip weekends for advertised dates
             continue
 
         st.subheader(f"{date.strftime('%A, %d %B %Y')}")
 
         pharmacist_names_today = sorted(daily['pharmacist_name'].unique())
-        pharm_cols = st.columns(len(pharmacist_names_today))
+        # Ensure at least one column is created, even if no pharmacists are available
+        pharm_cols = st.columns(max(1, len(pharmacist_names_today)))
 
         for i, pharmacist_name in enumerate(pharmacist_names_today):
             with pharm_cols[i]:
@@ -888,6 +1012,33 @@ def display_calendar(unbook_mode=False):
                                 show_booking_dialog(row.to_dict())
 
         st.divider()
+
+    # Add functionality for Practice Managers to submit booking requests beyond the advertised date
+    st.header("Submit Booking Future Requests", help="Request sessions beyond the advertised schedule")
+    start_date_beyond = last_advertised_date + timedelta(days=1)
+    end_date_beyond = start_date_beyond + timedelta(weeks=14)
+
+    cover_requests_df = get_cover_requests_data()
+
+    current_date_beyond = start_date_beyond
+    while current_date_beyond <= end_date_beyond:
+        if current_date_beyond.weekday() < 5: # Only show weekdays
+            st.markdown(f"**{current_date_beyond.strftime('%A, %d %B %Y')}**")
+
+            # Display existing cover requests for this date
+            daily_cover_requests = cover_requests_df[
+                (cover_requests_df['cover_date'].dt.date == current_date_beyond)
+            ].sort_values(by='submission_timestamp')
+
+            if not daily_cover_requests.empty:
+                for _, req_row in daily_cover_requests.iterrows():
+                    st.caption(f"**{req_row['surgery']}** requested by {req_row['name']} at {req_row['submission_timestamp'].strftime('%d %b %y %H:%M')}")
+                    # Removed the description caption as per user's implicit feedback (it was removed from the example)
+
+            if st.button("Request Cover", key=f"interest_{current_date_beyond.strftime('%Y%m%d')}", icon=":material/event_upcoming:"):
+                show_cover_request_dialog(current_date_beyond)
+            st.divider()
+        current_date_beyond += timedelta(days=1)
 
 if __name__ == "__main__":
     display_calendar()
