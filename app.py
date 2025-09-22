@@ -69,7 +69,7 @@ def get_cover_requests_data():
             df['submission_timestamp'] = pd.to_datetime(df['submission_timestamp'], errors='coerce')
 
         # Ensure the DataFrame always has the expected columns, even if empty
-        expected_columns = ["uuid", "cover_date", "surgery", "name", "desc", "submission_timestamp"]
+        expected_columns = ["uuid", "cover_date", "surgery", "name", "session", "reason", "desc", "submission_timestamp"]
         for col in expected_columns:
             if col not in df.columns:
                 df[col] = None # Add missing columns
@@ -77,21 +77,21 @@ def get_cover_requests_data():
         return df
     except gspread.exceptions.WorksheetNotFound:
         st.warning(f"Worksheet '{SHEET_NAME_COVER_REQUESTS}' not found. Creating it...")
-        sheet = client.open_by_key(SPREADSHEET_ID).add_worksheet(SHEET_NAME_COVER_REQUESTS, rows=1, cols=6)
-        sheet.update([["uuid", "cover_date", "surgery", "name", "desc", "submission_timestamp"]])
+        sheet = client.open_by_key(SPREADSHEET_ID).add_worksheet(SHEET_NAME_COVER_REQUESTS, rows=1, cols=8)
+        sheet.update([["uuid", "cover_date", "surgery", "name", "session", "reason", "desc", "submission_timestamp"]])
         # Return a DataFrame with expected columns after creating the sheet
-        return pd.DataFrame(columns=["uuid", "cover_date", "surgery", "name", "desc", "submission_timestamp"])
+        return pd.DataFrame(columns=["uuid", "cover_date", "surgery", "name", "session", "reason", "desc", "submission_timestamp"])
     except Exception as e:
         st.error(f"An error occurred while reading cover requests data from Google Sheet: {e}")
-        return pd.DataFrame(columns=["uuid", "cover_date", "surgery", "name", "desc", "submission_timestamp"]) # Ensure columns are always returned
+        return pd.DataFrame(columns=["uuid", "cover_date", "surgery", "name", "session", "reason", "desc", "submission_timestamp"]) # Ensure columns are always returned
 
-def add_cover_request_data(cover_date, surgery, name, desc):
+def add_cover_request_data(cover_date, surgery, name, session, reason, desc):
     """Add a new cover request to Google Sheet (cover_request)"""
     try:
         sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME_COVER_REQUESTS)
         new_uuid = str(uuid.uuid4())
         submission_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        sheet.append_row([new_uuid, cover_date.strftime('%Y-%m-%d'), surgery, name, desc, submission_timestamp])
+        sheet.append_row([new_uuid, cover_date.strftime('%Y-%m-%d'), surgery, name, session, reason, desc, submission_timestamp])
         st.success("Cover request submitted successfully!")
         get_cover_requests_data.clear() # Clear cache to refresh data
     except Exception as e:
@@ -413,6 +413,8 @@ def show_admin_panel(df):
 
     if admin_tab == "Surgery Session Plots":
         st.session_state.view = 'plot'
+        st.sidebar.subheader("Surgery Session Plots")
+        st.session_state.plot_type = st.sidebar.radio("Select Plot Type", ["Absolute Session Plot", "Normalized Sessions per 1000 pts", "Monthly Sessions"])
     elif admin_tab == "View Future Requests":
         st.session_state.view = 'future_requests'
     else:
@@ -676,7 +678,7 @@ def show_admin_panel(df):
             ].sort_values(by='cover_date')
 
             if not future_requests.empty:
-                st.dataframe(future_requests[['cover_date', 'surgery', 'name', 'desc', 'submission_timestamp']], use_container_width=True)
+                st.dataframe(future_requests[['cover_date', 'surgery', 'name', 'session', 'reason', 'desc', 'submission_timestamp']], use_container_width=True)
             else:
                 st.info("No future cover requests found.")
         else:
@@ -759,21 +761,48 @@ def show_cover_request_dialog(cover_date):
             "Requested by (Your Name)",
             key=f"cover_name_{cover_date.strftime('%Y%m%d')}"
         )
-        description = st.text_area(
-            "Description (e.g., AM/PM, specific needs)",
-            key=f"cover_desc_{cover_date.strftime('%Y%m%d')}",
-            help="Provide details about the cover needed, this will not be displayed on the page."
+
+        selected_session = st.selectbox(
+            "Session",
+            ['AM', 'PM', 'Full-day'],
+            key=f"cover_session_{cover_date.strftime('%Y%m%d')}"
         )
+
+        reason_options = ['Annual Leave', 'Study Leave', 'Other']
+        selected_reason = st.selectbox(
+            "Reason",
+            reason_options,
+            key=f"cover_reason_{cover_date.strftime('%Y%m%d')}"
+        )
+
+        other_reason_text = ""
+        if selected_reason == "Other":
+            other_reason_text = st.text_input(
+                "Please specify other reason",
+                key=f"other_reason_text_{cover_date.strftime('%Y%m%d')}"
+            )
 
         col1, col2 = st.columns(2)
         submitted = col1.form_submit_button("Submit Request")
         cancel_button = col2.form_submit_button("Cancel")
 
         if submitted:
-            if not selected_surgery or not requested_by_name or not description:
+            final_reason = selected_reason
+            final_description = "" # Initialize final_description
+
+            if selected_reason == "Other":
+                if not other_reason_text:
+                    st.error("Please specify the other reason.")
+                    st.stop()
+                final_description = other_reason_text
+                final_reason = other_reason_text # Store the specific reason if "Other" is selected
+            else:
+                final_description = selected_reason # Use the selected reason as description if not "Other"
+
+            if not selected_surgery or not requested_by_name or not selected_session or not final_reason:
                 st.error("All fields are required.")
             else:
-                add_cover_request_data(cover_date, selected_surgery, requested_by_name, description)
+                add_cover_request_data(cover_date, selected_surgery, requested_by_name, selected_session, final_reason, final_description)
                 time.sleep(0.2)
                 st.rerun() # Rerun to close dialog and refresh main app
 
@@ -813,6 +842,7 @@ def display_plot(df):
 
         # Merge dataframes to get list sizes
         merged_df = pd.merge(surgery_counts, surgeries_df, left_on='Surgery', right_on='surgery', how='left')
+        merged_df['list_size'] = pd.to_numeric(merged_df['list_size'], errors='coerce').fillna(0) # Ensure numeric
         merged_df['list_size'] = merged_df['list_size'].replace(0, 1) # Avoid division by zero
         merged_df['Normalized Sessions'] = (merged_df['Number of Sessions'] / merged_df['list_size']) * 1000
         mean_sessions = merged_df['Normalized Sessions'].mean()
@@ -838,7 +868,7 @@ def display_plot(df):
             annotation_text=f"Mean: {mean_sessions:.2f}",
             annotation_position="top right"
         )
-    else: # Absolute Session Plot
+    elif plot_type == "Absolute Session Plot": # Existing absolute plot
         fig2 = px.bar(
             surgery_counts,
             x='Surgery',
@@ -853,6 +883,36 @@ def display_plot(df):
             showlegend=False, # Hide legend as colors are self-explanatory
             xaxis_tickangle=-45 # Angle the x-axis labels for better readability
         )
+    elif plot_type == "Monthly Sessions": # New monthly sessions plot
+        # Ensure 'Date' column is datetime
+        plot_df['Date'] = pd.to_datetime(plot_df['Date'], errors='coerce')
+        plot_df = plot_df.dropna(subset=['Date']) # Drop rows with invalid dates
+
+        # Extract month and year for grouping
+        plot_df['Month'] = plot_df['Date'].dt.to_period('M')
+
+        # Group by surgery and month, then count sessions
+        monthly_sessions = plot_df.groupby(['surgery', 'Month']).size().reset_index(name='Number of Sessions')
+        monthly_sessions['Month'] = monthly_sessions['Month'].dt.to_timestamp() # Convert Period to Timestamp for plotting
+
+        fig2 = px.line(
+            monthly_sessions,
+            x='Month',
+            y='Number of Sessions',
+            color='surgery',
+            title='Number of Sessions per Month per Surgery',
+            labels={'Month': 'Month', 'Number of Sessions': 'Number of Sessions', 'surgery': 'Surgery'},
+            template='plotly_white'
+        )
+        fig2.update_layout(
+            xaxis_title="Month",
+            yaxis_title="Number of Sessions",
+            hovermode="x unified"
+        )
+        fig2.update_xaxes(
+            dtick="M1", # Show ticks for each month
+            tickformat="%b\n%Y" # Format as Jan\n2025
+        )
 
     st.plotly_chart(fig2, use_container_width=True, key="surgery_plot")
 
@@ -863,9 +923,10 @@ def display_calendar(unbook_mode=False):
             st.image('images/userguide.png')
     with c3:
         with st.popover(':material/event:'):
-            st.markdown(':material/event_available: 2025 Communal Sessions **Release Schedule**')
-            release = pd.read_csv('data/release.csv')
-            st.dataframe(release, width=400, height=700, hide_index=True)
+            st.markdown(':material/event_available: 2025 **Fair Share**')
+            release = pd.read_csv('data/fairshare.csv')
+            with st.container(width=700):
+                st.dataframe(release, width=800, height=700, hide_index=True)
     with c2:
         with st.popover(':material/bar_chart:'):
             with st.container(width=700):
@@ -922,9 +983,6 @@ def display_calendar(unbook_mode=False):
         st.sidebar.image('images/logo22.png')
     df = get_schedule_data()
 
-    if 'view' not in st.session_state:
-        st.session_state.view = 'calendar'
-
     if not df.empty:
         if 'slot_index' not in df.columns:
             if 'pharm' in df.columns and pd.api.types.is_numeric_dtype(df['pharm']):
@@ -941,20 +999,28 @@ def display_calendar(unbook_mode=False):
             else:
                 df['pharmacist_name'] = "Pharmacist"
 
+    # Initialize view state if not already set
+    if 'view' not in st.session_state:
+        st.session_state.view = 'calendar'
+    if 'plot_type' not in st.session_state:
+        st.session_state.plot_type = "Absolute Session Plot" # Default plot type
+
     if password == st.secrets["admin_password"]:
         unbook_mode = show_admin_panel(df)
     elif password != "":
         st.sidebar.error("Incorrect password")
 
+    # Display content based on the selected view
     if st.session_state.view == 'plot':
         display_plot(df)
         return
     elif st.session_state.view == 'future_requests':
-        # The display logic is handled within show_admin_panel for this view
+        # The display logic for future requests is handled within show_admin_panel for this view
+        # No need to duplicate it here.
         return
 
     # --- Main Calendar Display ---
-    st.html("<div class='status' style='background-color: #3982c2; color: #fafafa; padding-top: 6px; padding-bottom: 6px; padding-left: 20px; padding-right: 20px; border-radius: 10px; font-family: Arial, sans-serif; font-size: 26px; display: inline-block; text-align: center; box-shadow: 0px 2px 3px rgba(0, 0, 0, 0.5);'>Request a <b>Pharmacist Session</b> - BH PCN</B></div>")
+    st.html("<div class='status' style='background-color: #115e59; color: #fafafa; padding-top: 6px; padding-bottom: 6px; padding-left: 20px; padding-right: 20px; border-radius: 10px; font-family: Arial, sans-serif; font-size: 26px; display: inline-block; text-align: center; box-shadow: 0px 2px 3px rgba(0, 0, 0, 0.5);'>Request a <b>Pharmacist Session</b> - BH PCN</B></div>")
     if df.empty:
         st.info("No pharmacist shifts have been scheduled yet. Contact admin.")
         return
@@ -1014,7 +1080,7 @@ def display_calendar(unbook_mode=False):
         st.divider()
 
     # Add functionality for Practice Managers to submit booking requests beyond the advertised date
-    st.header("Submit Booking Future Requests", help="Request sessions beyond the advertised schedule")
+    st.header("Submit Future Requests", help="Request sessions beyond the advertised schedule")
     start_date_beyond = last_advertised_date + timedelta(days=1)
     end_date_beyond = start_date_beyond + timedelta(weeks=14)
 
@@ -1032,7 +1098,10 @@ def display_calendar(unbook_mode=False):
 
             if not daily_cover_requests.empty:
                 for _, req_row in daily_cover_requests.iterrows():
-                    st.caption(f"**{req_row['surgery']}** requested by {req_row['name']} at {req_row['submission_timestamp'].strftime('%d %b %y %H:%M')}")
+                    submission_time_str = req_row['submission_timestamp'].strftime('%d %b %y %H:%M') if pd.notna(req_row['submission_timestamp']) else "N/A"
+                    st.caption(f"**{req_row['surgery']}** requested by {req_row['name']} at {submission_time_str}")
+                    if password == st.secrets["admin_password"]: # Check if admin is logged in
+                        st.caption(f"Session: {req_row['session']} | Reason: {req_row['reason']} | Description: {req_row['desc']}")
                     # Removed the description caption as per user's implicit feedback (it was removed from the example)
 
             if st.button("Request Cover", key=f"interest_{current_date_beyond.strftime('%Y%m%d')}", icon=":material/event_upcoming:"):
@@ -1042,3 +1111,5 @@ def display_calendar(unbook_mode=False):
 
 if __name__ == "__main__":
     display_calendar()
+
+    st.sidebar.html("""<BR><BR><BR><BR><BR><BR><center><img alt="Static Badge" src="https://img.shields.io/badge/GitHub-janduplessis883-%23cb6429?link=https%3A%2F%2Fgithub.com%2Fjanduplessis883%2Fstreamlit-cal"></center>""")
