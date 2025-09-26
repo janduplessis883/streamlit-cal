@@ -2,362 +2,31 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 import gspread
+from gspread.utils import ValueInputOption # Import ValueInputOption from gspread.utils
 from google.oauth2.service_account import Credentials
 import time
 import os
 import resend
+import uuid # Import uuid for generating unique IDs
+from typing import Any # Import Any for type hinting
+import plotly.express as px
+
+# Local Imports
+from plots import fair_share_plot, display_plot, display_normalized_sessions_plot
+from core import client, get_gspread_client # Import client and get_gspread_client from core.py
 
 # Google Sheet details
-SPREADSHEET_ID = "1m6fJqggnvRJ9u-Hk5keUaPZ_gJHrd4GZmowE3j3nH-c"
-SHEET_NAME = "Sheet1"
-SHEET_NAME_SURGERIES = "Sheet2"
-SHEET_NAME_PHARMACISTS = "Sheet3"
+from core import SPREADSHEET_ID, SHEET_NAME, SHEET_NAME_COVER_REQUESTS, SHEET_NAME_SURGERIES, SHEET_NAME_PHARMACISTS, get_schedule_data, get_cover_requests_data, add_cover_request_data, get_surgeries_data, add_surgery_data, delete_surgery_data, get_pharmacists_data, add_pharmacist_data, delete_pharmacist_data, generate_ics_file, send_resend_email, cancel_booking, update_booking # Import from core.py
 
-
-# Authenticate with Google Sheets using st.secrets
-@st.cache_resource
-def get_gspread_client():
-    try:
-        creds = Credentials.from_service_account_info(
-            st.secrets["gsheets"],
-            scopes=["https://www.googleapis.com/auth/spreadsheets"]
-        )
-        client = gspread.authorize(creds)
-        return client
-    except Exception as e:
-        st.error(f"Error authenticating with Google Sheets: {e}")
-        st.stop()
-
-client = get_gspread_client()
-
-def get_schedule_data():
-    """Fetch pharmacist schedule data from Google Sheet"""
-    try:
-        sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
-        with st.spinner("Fetching schedule..."):
-            data = sheet.get_all_records()
-        df = pd.DataFrame(data)
-        return df
-    except Exception as e:
-        st.error(f"An error occurred while reading data from Google Sheet: {e}")
-        return pd.DataFrame()
-
-@st.cache_data(ttl=3600) # Cache for 1 hour
-def get_surgeries_data():
-    """Fetch saved surgeries data from Google Sheet (Sheet2)"""
-    try:
-        sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME_SURGERIES)
-        with st.spinner("Fetching surgeries data..."):
-            data = sheet.get_all_records()
-        df = pd.DataFrame(data)
-        # Ensure list_size is numeric, coercing errors
-        if 'list_size' in df.columns:
-            df['list_size'] = pd.to_numeric(df['list_size'], errors='coerce').fillna(0)
-        return df
-    except gspread.exceptions.WorksheetNotFound:
-        st.warning(f"Worksheet '{SHEET_NAME_SURGERIES}' not found. Creating it...")
-        # Create the worksheet if it doesn't exist
-        sheet = client.open_by_key(SPREADSHEET_ID).add_worksheet(SHEET_NAME_SURGERIES, rows=1, cols=3)
-        sheet.update([["surgery", "email", "list_size"]]) # Add headers
-        return pd.DataFrame(columns=["surgery", "email", "list_size"])
-    except Exception as e:
-        st.error(f"An error occurred while reading surgeries data from Google Sheet: {e}")
-        return pd.DataFrame()
-
-def add_surgery_data(surgery_name, email_address, list_size):
-    """Add a new surgery and email to Google Sheet (Sheet2)"""
-    try:
-        sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME_SURGERIES)
-        # Check if surgery already exists
-        existing_data = sheet.get_all_records()
-        for row in existing_data:
-            if row.get("surgery") == surgery_name and row.get("email") == email_address:
-                st.info(f"Surgery '{surgery_name}' with email '{email_address}' already exists.")
-                return
-
-        sheet.append_row([surgery_name, email_address, list_size])
-        st.success(f"Surgery '{surgery_name}' added successfully!")
-        get_surgeries_data.clear() # Clear cache to refresh data
-    except Exception as e:
-        st.error(f"An error occurred while adding surgery data to Google Sheet: {e}")
-
-def delete_surgery_data(surgery_name, email_address):
-    """Delete a surgery entry from Google Sheet (Sheet2)"""
-    try:
-        sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME_SURGERIES)
-        # Find the row index of the surgery to delete
-        # gspread's find method returns the Cell object, which has a 'row' attribute
-        cell = sheet.find(surgery_name)
-        if cell:
-            # Verify email matches to prevent accidental deletion if surgery names are not unique
-            row_values = sheet.row_values(cell.row)
-            # Assuming 'surgery' is in column A and 'email' in column B
-            if len(row_values) >= 2 and row_values[1] == email_address:
-                sheet.delete_rows(cell.row)
-                st.success(f"Surgery '{surgery_name}' deleted successfully!")
-                get_surgeries_data.clear() # Clear cache to refresh data
-            else:
-                st.error(f"Could not delete surgery: Email mismatch for '{surgery_name}'.")
-        else:
-            st.error(f"Surgery '{surgery_name}' not found.")
-    except Exception as e:
-        st.error(f"An error occurred while deleting surgery data from Google Sheet: {e}")
-
-def delete_pharmacist_data(pharmacist_name, email_address):
-    """Delete a pharmacist entry from Google Sheet (Sheet3)"""
-    try:
-        sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME_PHARMACISTS)
-        # Find the row index of the pharmacist to delete
-        cell = sheet.find(pharmacist_name)
-        if cell:
-            # Verify email matches to prevent accidental deletion if names are not unique
-            row_values = sheet.row_values(cell.row)
-            # Assuming 'Name' is in column A and 'Email' in column B
-            if len(row_values) >= 2 and row_values[1] == email_address:
-                sheet.delete_rows(cell.row)
-                st.success(f"Pharmacist '{pharmacist_name}' deleted successfully!")
-                get_pharmacists_data.clear()
-            else:
-                st.error(f"Could not delete pharmacist: Email mismatch for '{pharmacist_name}'.")
-        else:
-            st.error(f"Pharmacist '{pharmacist_name}' not found.")
-    except Exception as e:
-        st.error(f"An error occurred while deleting pharmacist data from Google Sheet: {e}")
-
-@st.cache_data(ttl=1200) # Cache for 1 hour
-def get_pharmacists_data():
-    """Fetch saved pharmacists data from Google Sheet (Sheet3)"""
-    try:
-        sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME_PHARMACISTS)
-        with st.spinner("Fetching pharmacists data..."):
-            data = sheet.get_all_records()
-        df = pd.DataFrame(data)
-        return df
-    except gspread.exceptions.WorksheetNotFound:
-        st.warning(f"Worksheet '{SHEET_NAME_PHARMACISTS}' not found. Creating it...")
-        # Create the worksheet if it doesn't exist
-        sheet = client.open_by_key(SPREADSHEET_ID).add_worksheet(SHEET_NAME_PHARMACISTS, rows=1, cols=1)
-        sheet.update([["Name", "Email"]]) # Add header
-        return pd.DataFrame(columns=["Name", "Email"])
-    except Exception as e:
-        st.error(f"An error occurred while reading pharmacists data from Google Sheet: {e}")
-        return pd.DataFrame()
-
-def add_pharmacist_data(pharmacist_name, pharmacist_email):
-    """Add a new pharmacist to Google Sheet (Sheet3)"""
-    try:
-        sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME_PHARMACISTS)
-        # Check if pharmacist already exists
-        existing_data = sheet.get_all_records()
-        for row in existing_data:
-            if row.get("Name") == pharmacist_name:
-                st.info(f"Pharmacist '{pharmacist_name}' already exists.")
-                return
-
-        sheet.append_row([pharmacist_name, pharmacist_email])
-        st.success(f"Pharmacist '{pharmacist_name}' added successfully!")
-        get_pharmacists_data.clear() # Clear cache to refresh data
-    except Exception as e:
-        st.error(f"An error occurred while adding pharmacist data to Google Sheet: {e}")
-
-def generate_ics_file(pharmacist_name, start_time, end_time, location):
-    """Generate an Outlook .ics file for the booking"""
-    ics_content = f"""BEGIN:VCALENDAR
-VERSION:2.0
-PRODID:-//Pharma-Cal//EN
-BEGIN:VEVENT
-SUMMARY:Pharmacist Booking - {pharmacist_name}
-DTSTART:{start_time.strftime('%Y%m%dT%H%M%S')}
-DTEND:{end_time.strftime('%Y%m%dT%H%M%S')}
-LOCATION:{location} - Remote Session
-DESCRIPTION:Pharmacist: {pharmacist_name}
-END:VEVENT
-END:VCALENDAR"""
-
-    file_path = f"pharmacist_booking_{start_time.strftime('%Y%m%d')}.ics"
-    with open(file_path, 'w') as f:
-        f.write(ics_content)
-    return file_path
-
-def send_resend_email(to_email, subject, html_content, attachment_path=None):
-    """Send email via Resend API"""
-    resend.api_key = st.secrets["RESEND_API_KEY"]
-
-    if attachment_path:
-        with open(attachment_path, "rb") as f:
-            attachment_content = f.read()
-        attachment = {"filename": os.path.basename(attachment_path), "content": list(attachment_content)}
-    else:
-        attachment = None
-
-    params = {
-        "from": "Brompton Health PCN - Pharma-cal <hello@attribut.me>",
-        "to": to_email,
-        "subject": subject,
-        "html": html_content,
-        "attachments": [attachment] if attachment else [],
-    }
-
-    try:
-        resend.Emails.send(params)
-        return True
-    except Exception as e:
-        st.error(f"Error sending email: {e}")
-        return False
-
-def cancel_booking(slot):
-    """Cancel a booking, update the Google Sheet, and send cancellation emails."""
-    try:
-        sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
-        cell = sheet.find(slot['unique_code'])
-
-        if cell:
-            headers = sheet.row_values(1)
-            row_values = sheet.row_values(cell.row)
-
-            try:
-                # Get column indices
-                booked_col_idx = headers.index('booked') + 1
-                surgery_col_idx = headers.index('surgery') + 1
-                email_col_idx = headers.index('email') + 1
-                pharmacist_name_col_idx = headers.index('pharmacist_name') + 1
-                date_col_idx = headers.index('Date') + 1
-                am_pm_col_idx = headers.index('am_pm') + 1
-
-                # Get booking details from the sheet
-                surgery_name = row_values[surgery_col_idx - 1]
-                surgery_email = row_values[email_col_idx - 1]
-                pharmacist_name = row_values[pharmacist_name_col_idx - 1]
-                booking_date_str = row_values[date_col_idx - 1]
-                booking_am_pm = row_values[am_pm_col_idx - 1]
-
-                # Fetch pharmacist's email
-                pharmacists_df = get_pharmacists_data()
-                pharmacist_row = pharmacists_df[pharmacists_df['Name'] == pharmacist_name]
-                if pharmacist_row.empty:
-                    st.error(f"Could not find email for pharmacist {pharmacist_name}. Cancellation email to pharmacist not sent.")
-                    pharmacist_email = None
-                else:
-                    pharmacist_email = pharmacist_row['Email'].iloc[0]
-
-            except (ValueError, IndexError) as e:
-                st.error(f"Missing or incorrect column in Google Sheet: {e}")
-                return
-
-            with st.spinner("Cancelling booking and sending notifications..."):
-                # Clear booking info in the sheet
-                sheet.update_cell(cell.row, booked_col_idx, "FALSE")
-                sheet.update_cell(cell.row, surgery_col_idx, "")
-                sheet.update_cell(cell.row, email_col_idx, "")
-
-                # Prepare email content
-                booking_date = pd.to_datetime(booking_date_str).strftime('%A, %d %B %Y')
-                booking_time = '09:00 - 12:45' if booking_am_pm == 'am' else '13:15 - 17:00'
-
-                # Email to Surgery
-                if surgery_email:
-                    surgery_html = f"""
-                    <h2>Booking Cancellation Notice</h2>
-                    <p>The booking for <b>{pharmacist_name}</b> on <b>{booking_date}</b> at <b>{booking_time}</b> has been cancelled.</p>
-                    <p>This slot is now available again.</p>
-                    """
-                    send_resend_email(surgery_email, f"Booking Cancellation - {pharmacist_name} on {booking_date}", surgery_html)
-
-                # Email to Pharmacist
-                if pharmacist_email:
-                    pharmacist_html = f"""
-                    <h2>Booking Cancellation Notice</h2>
-                    <p>Your session at <b>{surgery_name}</b> on <b>{booking_date}</b> at <b>{booking_time}</b> has been cancelled.</p>
-                    <p>This slot is now available again.</p>
-                    """
-                    send_resend_email(pharmacist_email, f"Booking Cancellation - {surgery_name} on {booking_date}", pharmacist_html)
-
-
-            st.success("Booking cancelled successfully and notifications sent!")
-            time.sleep(1)
-            st.rerun()
-        else:
-            st.error("Could not find the slot to cancel.")
-    except Exception as e:
-        st.error(f"An error occurred while cancelling the booking: {e}")
-
-
-def update_booking(slot, surgery, email):
-    """Update the Google Sheet with booking details and send confirmation emails"""
-    try:
-        sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
-        # Find the row based on unique_code
-        cell = sheet.find(slot['unique_code'])
-
-        if cell:
-            # Get all headers to find column indices dynamically
-            headers = sheet.row_values(1)
-            try:
-                booked_col_idx = headers.index('booked') + 1
-                surgery_col_idx = headers.index('surgery') + 1
-                email_col_idx = headers.index('email') + 1
-            except ValueError as e:
-                st.error(f"Missing required column in Google Sheet: {e}")
-                return
-
-            # Update cells
-            with st.spinner("Updating booking..."):
-                sheet.update_cell(cell.row, booked_col_idx, "TRUE")
-                sheet.update_cell(cell.row, surgery_col_idx, surgery)
-                sheet.update_cell(cell.row, email_col_idx, email)
-
-                # Get pharmacist details
-                pharmacist_name = slot.get('pharmacist_name', 'Pharmacist')
-                pharmacists_df = get_pharmacists_data()
-                pharmacist_row = pharmacists_df[pharmacists_df['Name'] == pharmacist_name]
-
-                if pharmacist_row.empty:
-                    st.error(f"Could not find email for pharmacist {pharmacist_name}")
-                    return
-                pharmacist_email = pharmacist_row['Email'].iloc[0]
-
-
-                # Generate ICS file
-                date = pd.to_datetime(slot['Date'])
-                start_time = date.replace(hour=9 if slot['am_pm'] == 'am' else 13)
-                end_time = date.replace(hour=12, minute=45) if slot['am_pm'] == 'am' else date.replace(hour=17)
-                ics_file = generate_ics_file(pharmacist_name, start_time, end_time, surgery)
-
-                # Email to surgery
-                surgery_html = f"""
-                <h2>Pharmacist Booking Confirmation</h2>
-                <p>You have booked <b>{pharmacist_name}</b> for:</p>
-                <p><strong>Date:</strong> {date.strftime('%A, %d %B %Y')}</p>
-                <p><strong>Time:</strong> {'09:00 - 12:45' if slot['am_pm'] == 'am' else '13:15 - 17:00'}</p>
-                <p>Please find attached the calendar invite.</p>
-                """
-                send_resend_email(email, f"Pharmacist Booking Confirmation - {date.strftime('%d/%m/%Y')}",
-                                surgery_html, ics_file)
-
-                # Email to pharmacist
-                pharmacist_html = f"""
-                <h2>New Surgery Booking Notification</h2>
-                <p>You have been booked for a session at:</p>
-                <p><strong>Surgery:</strong> {surgery}</p>
-                <p><strong>Date:</strong> {date.strftime('%A, %d %B %Y')}</p>
-                <p><strong>Time:</strong> {'09:00 - 12:45' if slot['am_pm'] == 'am' else '13:15 - 17:00'}</p>
-                <p><strong>Surgery Email:</strong> {email}</p>
-                <p>Please find attached the calendar invite.</p>
-                """
-                send_resend_email(pharmacist_email, f"New Booking - {surgery} on {date.strftime('%d/%m/%Y')}",
-                                pharmacist_html, ics_file)
-
-        else:
-            st.error("Could not find the slot in the Google Sheet.")
-    except Exception as e:
-        st.error(f"An error occurred while updating the booking in Google Sheet: {e}")
 
 def show_admin_panel(df):
     unbook_mode = False  # Default value
-    admin_tab = st.sidebar.radio("Admin Options", ["Manage Availability", "Manage Surgeries", "Manage Pharmacists", "Surgery Session Plots"])
+    admin_tab = st.sidebar.radio("Admin Options", ["Manage Availability", "View Future Requests", "Manage Surgeries", "Manage Pharmacists", "Surgery Session Plots"], key="admin_options_radio")
 
     if admin_tab == "Surgery Session Plots":
         st.session_state.view = 'plot'
+    elif admin_tab == "View Future Requests":
+        st.session_state.view = 'future_requests'
     else:
         st.session_state.view = 'calendar'
 
@@ -479,8 +148,8 @@ def show_admin_panel(df):
                             for i in range(2): # Number of pharmacist columns
                                 for shift_type in ['am', 'pm']:
                                     slot_key = f"avail_{date.strftime('%Y%m%d')}_{shift_type}_{i}"
-                                    lookup_key = (date.date(), i, shift_type)
 
+                                    lookup_key = (date.date(), i, shift_type)
                                     slot_info = current_availability.get(lookup_key, {})
                                     original_pharmacist = slot_info.get('pharmacist_name', 'None')
                                     new_pharmacist = st.session_state.get(slot_key, 'None')
@@ -496,7 +165,7 @@ def show_admin_panel(df):
                                         if original_pharmacist != 'None' and unique_code:
                                             try:
                                                 cell_to_modify = sheet.find(unique_code)
-                                            except gspread.exceptions.CellNotFound:
+                                            except gspread.exceptions.APIError as e: # Changed to gspread.exceptions.APIError
                                                 # This can happen if data is out of sync. We can proceed as if it wasn't there.
                                                 pass
 
@@ -519,7 +188,7 @@ def show_admin_panel(df):
                                             }
                                             # Build the row in the correct order based on sheet headers
                                             ordered_row_values = [new_row_data.get(h, "") for h in headers]
-                                            sheet.append_row(ordered_row_values, value_input_option='USER_ENTERED')
+                                            sheet.append_row(ordered_row_values, value_input_option=ValueInputOption.raw)
 
                                         # Case 3: Modification
                                         else:
@@ -539,7 +208,7 @@ def show_admin_panel(df):
                                                     "slot_index": i
                                                 }
                                                 ordered_row_values = [new_row_data.get(h, "") for h in headers]
-                                                sheet.append_row(ordered_row_values, value_input_option='USER_ENTERED')
+                                                sheet.append_row(ordered_row_values, value_input_option=ValueInputOption.raw)
 
 
                     st.success("Availability updated successfully!")
@@ -605,7 +274,25 @@ def show_admin_panel(df):
             st.sidebar.info("No pharmacists saved yet.")
     elif admin_tab == "Surgery Session Plots":
         st.sidebar.subheader("Surgery Session Plots")
-        st.session_state.plot_type = st.sidebar.radio("Select Plot Type", ["Absolute Session Plot", "Normalized Sessions per 1000 pts"])
+        st.session_state.plot_type = st.sidebar.radio("Select Plot Type", ["Absolute Session Plot", "Normalized Sessions per 1000 pts", "Monthly Sessions"])
+    elif admin_tab == "View Future Requests":
+        st.header(":material/event_upcoming: Future Cover Requests")
+        st.sidebar.subheader("Future Cover Requests")
+        cover_requests_df = get_cover_requests_data()
+
+        if not cover_requests_df.empty:
+            # Filter for requests from today and the future
+            today = datetime.today().date()
+            future_requests = cover_requests_df[
+                (cover_requests_df['cover_date'].dt.date >= today)
+            ].sort_values(by='submission_timestamp')
+
+            if not future_requests.empty:
+                st.dataframe(future_requests[['cover_date', 'surgery', 'name', 'session', 'reason', 'desc', 'submission_timestamp']], use_container_width=True)
+            else:
+                st.info("No future cover requests found.")
+        else:
+            st.info("No cover requests submitted yet.")
 
     return unbook_mode
 
@@ -653,92 +340,89 @@ def show_booking_dialog(slot):
                 st.error("All fields are required.")
             else:
                 # If a new surgery was added, save it to Sheet2
+                # Removed add_surgery_data call from here as it's meant for admin panel
+                # If selected_surgery_option is "Add New Surgery", the user should be directed to admin panel
+                # or a separate flow for adding new surgeries.
                 if selected_surgery_option == "Add New Surgery":
-                    add_surgery_data(current_surgery, current_email)
+                    st.error("Please add new surgeries via the Admin Panel before booking.")
+                else:
+                    update_booking(slot, current_surgery, current_email)
+                    st.success("Booking saved successfully!")
+                    time.sleep(1.5)
+                    st.rerun() # Rerun to close dialog and refresh main app
 
-                update_booking(slot, current_surgery, current_email)
-                st.success("Booking saved successfully!")
-                time.sleep(1.5)
+        if cancel_button:
+            st.rerun() # Rerun to close dialog
+
+@st.dialog("Request Cover")
+def show_cover_request_dialog(cover_date):
+    st.markdown(f"Requesting cover for: **{cover_date.strftime('%A, %d %B %Y')}**")
+
+    surgeries_df = get_surgeries_data()
+    surgery_names = sorted(surgeries_df["surgery"].tolist()) if not surgeries_df.empty else []
+
+    with st.form(key=f"form_cover_request_{cover_date.strftime('%Y%m%d')}"):
+        selected_surgery = st.selectbox(
+            "Select Surgery",
+            [""] + surgery_names, # Add an empty option for initial selection
+            key=f"cover_surgery_{cover_date.strftime('%Y%m%d')}"
+        )
+        requested_by_name = st.text_input(
+            "Requested by (Your Name)",
+            key=f"cover_name_{cover_date.strftime('%Y%m%d')}"
+        )
+
+        selected_session = st.selectbox(
+            "Session",
+            ['AM', 'PM', 'Full-day'],
+            key=f"cover_session_{cover_date.strftime('%Y%m%d')}"
+        )
+
+        reason_options = ['Annual Leave', 'Study Leave', 'Other']
+        selected_reason = st.selectbox(
+            "Reason",
+            reason_options,
+            key=f"cover_reason_{cover_date.strftime('%Y%m%d')}"
+        )
+
+        other_reason_text = ""
+        if selected_reason == "Other":
+            other_reason_text = st.text_input(
+                "Please specify other reason",
+                key=f"other_reason_text_{cover_date.strftime('%Y%m%d')}"
+            )
+
+        col1, col2 = st.columns(2)
+        submitted = col1.form_submit_button("Submit Request")
+        cancel_button = col2.form_submit_button("Cancel")
+
+        if submitted:
+            final_reason = selected_reason
+            final_description = "" # Initialize final_description
+
+            if selected_reason == "Other":
+                if not other_reason_text:
+                    st.error("Please specify the other reason.")
+                    st.stop()
+                final_description = other_reason_text
+                final_reason = other_reason_text # Store the specific reason if "Other" is selected
+            else:
+                final_description = selected_reason # Use the selected reason as description if not "Other"
+
+            if not selected_surgery or not requested_by_name or not selected_session or not final_reason:
+                st.error("All fields are required.")
+            else:
+                add_cover_request_data(cover_date, selected_surgery, requested_by_name, selected_session, final_reason, final_description)
+                time.sleep(0.2)
                 st.rerun() # Rerun to close dialog and refresh main app
 
         if cancel_button:
             st.rerun() # Rerun to close dialog
 
-import plotly.express as px
+
 
 st.set_page_config(page_title="Pharma-Cal Brompton Heatlh PCN", layout="centered", page_icon=":material/pill:")
 
-def display_plot(df):
-    st.subheader("Surgery Session Distribution")
-
-    plot_type = st.session_state.get('plot_type', "Absolute Session Plot")
-
-    # Ensure the DataFrame is not empty and contains required columns
-    if df.empty or 'surgery' not in df.columns:
-        st.info("No data available to display the plot.")
-        return
-
-    # Filter out rows where surgery is not specified or empty
-    plot_df = df[df['surgery'].notna() & (df['surgery'] != '')].copy()
-
-    if plot_df.empty:
-        st.info("No booked sessions with surgery information available.")
-        return
-
-    # Count sessions per surgery
-    surgery_counts = plot_df['surgery'].value_counts().reset_index()
-    surgery_counts.columns = ['Surgery', 'Number of Sessions']
-
-    if plot_type == "Normalized Sessions per 1000 pts":
-        surgeries_df = get_surgeries_data()
-        if surgeries_df.empty or 'list_size' not in surgeries_df.columns:
-            st.warning("List size information is not available. Please add it in the 'Manage Surgeries' section.")
-            return
-
-        # Merge dataframes to get list sizes
-        merged_df = pd.merge(surgery_counts, surgeries_df, left_on='Surgery', right_on='surgery', how='left')
-        merged_df['list_size'] = merged_df['list_size'].replace(0, 1) # Avoid division by zero
-        merged_df['Normalized Sessions'] = (merged_df['Number of Sessions'] / merged_df['list_size']) * 1000
-        mean_sessions = merged_df['Normalized Sessions'].mean()
-        fig2 = px.bar(
-            merged_df,
-            x='Surgery',
-            y='Normalized Sessions',
-            title='Normalized Sessions per 1000 Patients',
-            color='Surgery',
-            template='plotly_white'
-        )
-        fig2.update_layout(
-            xaxis_title="Surgery",
-            yaxis_title="Sessions per 1000 Patients",
-            showlegend=False,
-            xaxis_tickangle=-45
-        )
-        fig2.add_hline(
-            y=mean_sessions,
-            line_dash="dash",
-            line_width=0.8,
-            line_color="#ae4f4d",
-            annotation_text=f"Mean: {mean_sessions:.2f}",
-            annotation_position="top right"
-        )
-    else: # Absolute Session Plot
-        fig2 = px.bar(
-            surgery_counts,
-            x='Surgery',
-            y='Number of Sessions',
-            title='Number of Sessions per Surgery',
-            color='Surgery',  # Color bars by surgery name
-            template='plotly_white', # Use a clean, modern template
-        )
-        fig2.update_layout(
-            xaxis_title="Surgery",
-            yaxis_title="Number of Sessions",
-            showlegend=False, # Hide legend as colors are self-explanatory
-            xaxis_tickangle=-45 # Angle the x-axis labels for better readability
-        )
-
-    st.plotly_chart(fig2, use_container_width=True, key="surgery_plot")
 
 def display_calendar(unbook_mode=False):
     c1, c2, c3 = st.columns([0.25, 0.25, 2], gap="small")
@@ -747,57 +431,19 @@ def display_calendar(unbook_mode=False):
             st.image('images/userguide.png')
     with c3:
         with st.popover(':material/event:'):
-            st.markdown(':material/event_available: 2025 Communal Sessions **Release Schedule**')
-            release = pd.read_csv('data/release.csv')
-            st.dataframe(release, width=400, height=700, hide_index=True)
+            st.markdown(':material/event_available: 2025 **Fair Share**')
+            release = pd.read_csv('data/fairshare.csv')
+            with st.container(width=700):
+                st.dataframe(release, width=800, height=700, hide_index=True)
     with c2:
         with st.popover(':material/bar_chart:'):
             with st.container(width=700):
-                df = get_schedule_data()
-                plot_df = df[df['surgery'].notna() & (df['surgery'] != '')].copy()
-                surgery_counts = plot_df['surgery'].value_counts().reset_index()
-                surgery_counts.columns = ['Surgery', 'Number of Sessions']
-                surgeries_df = get_surgeries_data()
-                if surgeries_df.empty or 'list_size' not in surgeries_df.columns:
-                    st.warning("List size information is not available. Please add it in the 'Manage Surgeries' section.")
-                    return
-
-                # Merge dataframes to get list sizes
-                merged_df = pd.merge(surgery_counts, surgeries_df, left_on='Surgery', right_on='surgery', how='left')
-                merged_df['list_size'] = merged_df['list_size'].replace(0, 1) # Avoid division by zero
-                merged_df['Normalized Sessions'] = (merged_df['Number of Sessions'] / merged_df['list_size']) * 1000
-
-                mean_sessions = merged_df['Normalized Sessions'].mean()
-
-                fig = px.bar(
-                    merged_df,
-                    x='Surgery',
-                    y='Normalized Sessions',
-                    title='Normalized Sessions per 1000 Patients',
-                    color='Surgery',
-                    template='plotly_white'
-                )
-                fig.update_layout(
-                    xaxis_title="Surgery",
-                    yaxis_title="Sessions per 1000 Patients",
-                    showlegend=False,
-                    xaxis_tickangle=-45
-                )
-                # Add horizontal line at mean_sessions
-                fig.add_hline(
-                    y=mean_sessions,
-                    line_dash="dash",
-                    line_width=0.8,
-                    line_color="#ae4f4d",
-                    annotation_text=f"Mean: {mean_sessions:.2f}",
-                    annotation_position="top right"
-                )
-                st.plotly_chart(fig, use_container_width=True, key="user_plot")
+                display_normalized_sessions_plot(get_schedule_data, get_surgeries_data)
 
 
 
 
-    st.html("<div class='status' style='background-color: #3982c2; color: #fafafa; padding-top: 6px; padding-bottom: 6px; padding-left: 20px; padding-right: 20px; border-radius: 10px; font-family: Arial, sans-serif; font-size: 26px; display: inline-block; text-align: center; box-shadow: 0px 2px 3px rgba(0, 0, 0, 0.5);'>Request a <b>Pharmacist Session</b> - BH PCN</B></div>")
+
     st.logo('images/logo223.png', size="large")
     # --- Admin Sidebar ---
 
@@ -805,9 +451,6 @@ def display_calendar(unbook_mode=False):
     if password == '':
         st.sidebar.image('images/logo22.png')
     df = get_schedule_data()
-
-    if 'view' not in st.session_state:
-        st.session_state.view = 'calendar'
 
     if not df.empty:
         if 'slot_index' not in df.columns:
@@ -825,16 +468,28 @@ def display_calendar(unbook_mode=False):
             else:
                 df['pharmacist_name'] = "Pharmacist"
 
+    # Initialize view state if not already set
+    if 'view' not in st.session_state:
+        st.session_state.view = 'calendar'
+    if 'plot_type' not in st.session_state:
+        st.session_state.plot_type = "Absolute Session Plot" # Default plot type
+
     if password == st.secrets["admin_password"]:
         unbook_mode = show_admin_panel(df)
     elif password != "":
         st.sidebar.error("Incorrect password")
 
+    # Display content based on the selected view
     if st.session_state.view == 'plot':
-        display_plot(df)
+        display_plot(df, get_surgeries_data) # Pass get_surgeries_data as an argument
+        return
+    elif st.session_state.view == 'future_requests':
+        # The display logic for future requests is handled within show_admin_panel for this view
+        # No need to duplicate it here.
         return
 
     # --- Main Calendar Display ---
+    st.html("<div class='status' style='background-color: #334155; color: #fafafa; padding-top: 6px; padding-bottom: 6px; padding-left: 20px; padding-right: 20px; border-radius: 10px; font-family: Arial, sans-serif; font-size: 26px; display: inline-block; text-align: center; box-shadow: 0px 2px 3px rgba(0, 0, 0, 0.5);'>Request a <b>Pharmacist Session</b> - BH PCN</B></div>")
     if df.empty:
         st.info("No pharmacist shifts have been scheduled yet. Contact admin.")
         return
@@ -846,16 +501,20 @@ def display_calendar(unbook_mode=False):
 
     if upcoming.empty:
         st.info("No upcoming shifts available.")
-        return
+        last_advertised_date = datetime.today().date() # If no upcoming, start from today
+    else:
+        last_advertised_date = upcoming['Date'].max().date()
 
+    # Display existing pharmacist schedule
     for date, daily in upcoming.groupby(df['Date'].dt.date):
-        if date.weekday() >= 5:
+        if date.weekday() >= 5: # Skip weekends for advertised dates
             continue
 
         st.subheader(f"{date.strftime('%A, %d %B %Y')}")
 
         pharmacist_names_today = sorted(daily['pharmacist_name'].unique())
-        pharm_cols = st.columns(len(pharmacist_names_today))
+        # Ensure at least one column is created, even if no pharmacists are available
+        pharm_cols = st.columns(max(1, len(pharmacist_names_today)))
 
         for i, pharmacist_name in enumerate(pharmacist_names_today):
             with pharm_cols[i]:
@@ -889,5 +548,37 @@ def display_calendar(unbook_mode=False):
 
         st.divider()
 
+    # Add functionality for Practice Managers to submit booking requests beyond the advertised date
+    st.header("Submit Future Requests", help="Request sessions beyond the advertised schedule")
+    start_date_beyond = last_advertised_date + timedelta(days=1)
+    end_date_beyond = start_date_beyond + timedelta(weeks=14)
+
+    cover_requests_df = get_cover_requests_data()
+
+    current_date_beyond = start_date_beyond
+    while current_date_beyond <= end_date_beyond:
+        if current_date_beyond.weekday() < 5: # Only show weekdays
+            st.markdown(f"**{current_date_beyond.strftime('%A, %d %B %Y')}**")
+
+            # Display existing cover requests for this date
+            daily_cover_requests = cover_requests_df[
+                (cover_requests_df['cover_date'].dt.date == current_date_beyond)
+            ].sort_values(by='submission_timestamp')
+
+            if not daily_cover_requests.empty:
+                for _, req_row in daily_cover_requests.iterrows():
+                    submission_time_str = req_row['submission_timestamp'].strftime('%d %b %y %H:%M') if pd.notna(req_row['submission_timestamp']) else "N/A"
+                    st.caption(f"**{req_row['surgery']}** requested by {req_row['name']} at {submission_time_str}")
+                    if password == st.secrets["admin_password"]: # Check if admin is logged in
+                        st.caption(f"Session: {req_row['session']} | Reason: {req_row['reason']} | Description: {req_row['desc']}")
+                    # Removed the description caption as per user's implicit feedback (it was removed from the example)
+
+            if st.button("Request Cover", key=f"interest_{current_date_beyond.strftime('%Y%m%d')}", icon=":material/event_upcoming:"):
+                show_cover_request_dialog(current_date_beyond)
+            st.divider()
+        current_date_beyond += timedelta(days=1)
+
 if __name__ == "__main__":
     display_calendar()
+
+    st.sidebar.html("""<BR><BR><BR><BR><BR><BR><center><img alt="Static Badge" src="https://img.shields.io/badge/GitHub-janduplessis883-%23316576"></center>""")
