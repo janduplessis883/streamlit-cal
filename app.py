@@ -489,7 +489,7 @@ def display_calendar(unbook_mode=False):
         return
 
     # --- Main Calendar Display ---
-    st.html("<div class='status' style='background-color: #0c4a6e; color: #fafafa; padding-top: 6px; padding-bottom: 6px; padding-left: 20px; padding-right: 20px; border-radius: 10px; font-family: Arial, sans-serif; font-size: 26px; display: inline-block; text-align: center; box-shadow: 0px 2px 3px rgba(0, 0, 0, 0.5);'>Request a <b>Pharmacist Session</b> - BH PCN</B></div>")
+    st.html("<div class='status' style='background-color: #334155; color: #fafafa; padding-top: 6px; padding-bottom: 6px; padding-left: 20px; padding-right: 20px; border-radius: 10px; font-family: Arial, sans-serif; font-size: 26px; display: inline-block; text-align: center; box-shadow: 0px 2px 3px rgba(0, 0, 0, 0.5);'>Request a <b>Pharmacist Session</b> - BH PCN</B></div>")
     if df.empty:
         st.info("No pharmacist shifts have been scheduled yet. Contact admin.")
         return
