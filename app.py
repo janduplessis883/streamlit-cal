@@ -77,46 +77,81 @@ def show_admin_panel(df):
                 else:
                     st.markdown(f"**{date_str}**")
 
-                    cols = st.columns(2)
-                    for i, col in enumerate(cols):
+                    st.markdown("AM")
+                    cols_am = st.columns(3)
+                    for i, col in enumerate(cols_am):
                         with col:
-                            for shift_type in ['am', 'pm']:
-                                slot_key = f"avail_{date.strftime('%Y%m%d')}_{shift_type}_{i}"
+                            shift_type = 'am'
+                            slot_key = f"avail_{date.strftime('%Y%m%d')}_{shift_type}_{i}"
 
-                                lookup_key = (date.date(), i, shift_type)
-                                slot_info = current_availability.get(lookup_key, {'booked': False, 'pharmacist_name': 'None'})
-                                is_booked = slot_info['booked']
+                            lookup_key = (date.date(), i, shift_type)
+                            slot_info = current_availability.get(lookup_key, {'booked': False, 'pharmacist_name': 'None'})
+                            is_booked = slot_info['booked']
 
-                                default_pharmacist = slot_info.get('pharmacist_name', 'None')
+                            default_pharmacist = slot_info.get('pharmacist_name', 'None')
 
-                                # Create a temporary list of options for this specific selectbox
-                                current_options = list(pharmacist_names)
+                            current_options = list(pharmacist_names)
+                            if is_booked and default_pharmacist not in current_options:
+                                current_options.append(default_pharmacist)
 
-                                if is_booked and default_pharmacist not in current_options:
-                                    # If the booked pharmacist is not in the main list (e.g., deleted),
-                                    # add them to the options for this dropdown to display correctly.
-                                    current_options.append(default_pharmacist)
+                            if default_pharmacist not in current_options:
+                                default_pharmacist = "None"
 
-                                # If default_pharmacist is still not in the list (e.g. it's None), default to "None"
-                                if default_pharmacist not in current_options:
-                                    default_pharmacist = "None"
+                            selected_pharmacist = st.selectbox(
+                                "Pharmacist",
+                                current_options,
+                                index=current_options.index(default_pharmacist),
+                                key=slot_key,
+                                label_visibility="collapsed",
+                                disabled=is_weekend or is_booked
+                            )
 
-                                selected_pharmacist = st.selectbox(
-                                    f"{shift_type.upper()} Slot",
-                                    current_options, # Use the potentially modified list
-                                    index=current_options.index(default_pharmacist),
-                                    key=slot_key,
-                                    disabled=is_weekend or is_booked
-                                )
+                            if not is_weekend and selected_pharmacist != "None":
+                                selected_slots.append({
+                                    "date": date,
+                                    "am_pm": shift_type,
+                                    "pharmacist_name": selected_pharmacist,
+                                    "booked_info": slot_info,
+                                    "pharm_id": i
+                                })
 
-                                if not is_weekend and selected_pharmacist != "None":
-                                    selected_slots.append({
-                                        "date": date,
-                                        "am_pm": shift_type,
-                                        "pharmacist_name": selected_pharmacist,
-                                        "booked_info": slot_info,
-                                        "pharm_id": i
-                                    })
+                    st.markdown("PM")
+                    cols_pm = st.columns(3)
+                    for i, col in enumerate(cols_pm):
+                        with col:
+                            shift_type = 'pm'
+                            slot_key = f"avail_{date.strftime('%Y%m%d')}_{shift_type}_{i}"
+
+                            lookup_key = (date.date(), i, shift_type)
+                            slot_info = current_availability.get(lookup_key, {'booked': False, 'pharmacist_name': 'None'})
+                            is_booked = slot_info['booked']
+
+                            default_pharmacist = slot_info.get('pharmacist_name', 'None')
+
+                            current_options = list(pharmacist_names)
+                            if is_booked and default_pharmacist not in current_options:
+                                current_options.append(default_pharmacist)
+
+                            if default_pharmacist not in current_options:
+                                default_pharmacist = "None"
+
+                            selected_pharmacist = st.selectbox(
+                                "Pharmacist",
+                                current_options,
+                                index=current_options.index(default_pharmacist),
+                                key=slot_key,
+                                label_visibility="collapsed",
+                                disabled=is_weekend or is_booked
+                            )
+
+                            if not is_weekend and selected_pharmacist != "None":
+                                selected_slots.append({
+                                    "date": date,
+                                    "am_pm": shift_type,
+                                    "pharmacist_name": selected_pharmacist,
+                                    "booked_info": slot_info,
+                                    "pharm_id": i
+                                })
 
             submitted = st.form_submit_button("Update Availability")
             if submitted:
@@ -145,7 +180,7 @@ def show_admin_panel(df):
                         for date in dates_to_show:
                             if date.weekday() >= 5: continue
 
-                            for i in range(2): # Number of pharmacist columns
+                            for i in range(3): # Number of pharmacist columns
                                 for shift_type in ['am', 'pm']:
                                     slot_key = f"avail_{date.strftime('%Y%m%d')}_{shift_type}_{i}"
 
@@ -512,24 +547,24 @@ def display_calendar(unbook_mode=False):
 
         st.subheader(f"{date.strftime('%A, %d %B %Y')}")
 
-        pharmacist_names_today = sorted(daily['pharmacist_name'].unique())
-        # Ensure at least one column is created, even if no pharmacists are available
-        pharm_cols = st.columns(max(1, len(pharmacist_names_today)))
+        # AM Shift
+        st.markdown("**AM**")
+        am_slots = daily[daily['am_pm'] == 'am']
+        am_cols = st.columns(3)
+        for i in range(3):
+            with am_cols[i]:
+                slot_data = am_slots[am_slots['slot_index'] == i]
+                if not slot_data.empty:
+                    row = slot_data.iloc[0]
+                    pharmacist_name = row['pharmacist_name']
+                    if pharmacist_name and pharmacist_name != "None":
+                        st.markdown(f":orange[**{pharmacist_name}**]")
+                    else:
+                        st.markdown("**Available**")
 
-        for i, pharmacist_name in enumerate(pharmacist_names_today):
-            with pharm_cols[i]:
-                st.markdown(f":orange[**{pharmacist_name}**]")
-                pharmacist_slots = daily[daily['pharmacist_name'] == pharmacist_name].sort_values(['am_pm'])
-
-                if pharmacist_slots.empty:
-                    st.info(f"No sessions available for {pharmacist_name}.")
-
-                for _, row in pharmacist_slots.iterrows():
-                    shift = row['am_pm'].upper()
                     booked = str(row['booked']).upper() == "TRUE"
-
-                    btn_label = "09:00 - 12:45" if shift == "AM" else "13:15 - 17:00"
-                    unique_key = f"{row['unique_code']}_{row['pharmacist_name']}"
+                    btn_label = "09:00 - 12:45"
+                    unique_key = f"{row['unique_code']}_{pharmacist_name}_{i}_am"
 
                     if unbook_mode:
                         if booked:
@@ -545,9 +580,46 @@ def display_calendar(unbook_mode=False):
                         else:
                             if st.button(btn_label, key=unique_key):
                                 show_booking_dialog(row.to_dict())
+                else:
+                    st.button("Not Available", disabled=True, key=f"empty_{date}_am_{i}")
+
+        # PM Shift
+        st.markdown("**PM**")
+        pm_slots = daily[daily['am_pm'] == 'pm']
+        pm_cols = st.columns(3)
+        for i in range(3):
+            with pm_cols[i]:
+                slot_data = pm_slots[pm_slots['slot_index'] == i]
+                if not slot_data.empty:
+                    row = slot_data.iloc[0]
+                    pharmacist_name = row['pharmacist_name']
+                    if pharmacist_name and pharmacist_name != "None":
+                        st.markdown(f":orange[**{pharmacist_name}**]")
+                    else:
+                        st.markdown("**Available**")
+
+                    booked = str(row['booked']).upper() == "TRUE"
+                    btn_label = "13:15 - 17:00"
+                    unique_key = f"{row['unique_code']}_{pharmacist_name}_{i}_pm"
+
+                    if unbook_mode:
+                        if booked:
+                            if st.button(btn_label + " (Cancel)", key=unique_key):
+                                cancel_booking(row.to_dict())
+                        else:
+                            st.button(btn_label, key=unique_key, disabled=True)
+                    else:
+                        if booked:
+                            st.button(btn_label + " (Booked)", key=unique_key, disabled=True)
+                            if row['surgery']:
+                                st.caption(row['surgery'])
+                        else:
+                            if st.button(btn_label, key=unique_key):
+                                show_booking_dialog(row.to_dict())
+                else:
+                    st.button("Not Available", disabled=True, key=f"empty_{date}_pm_{i}")
 
         st.divider()
-
     # Add functionality for Practice Managers to submit booking requests beyond the advertised date
     st.header("Submit Future Requests", help="Request sessions beyond the advertised schedule")
     start_date_beyond = last_advertised_date + timedelta(days=1)
