@@ -34,7 +34,16 @@ def show_admin_panel(df):
         st.sidebar.subheader("Manage Availability")
         unbook_mode = st.sidebar.toggle("Unbook Mode", value=False)
 
-        num_weeks = st.sidebar.slider("Number of weeks to show", 1, 12, 4)
+        today = datetime.today().date()
+        three_months_later = today + timedelta(days=90)
+
+        availability_range = st.sidebar.slider(
+            "Select date range for availability",
+            min_value=today,
+            max_value=three_months_later,
+            value=(today, today + timedelta(weeks=4)),
+            format="ddd, D MMM YYYY"
+        )
 
         pharmacists_df = get_pharmacists_data()
         pharmacist_names = ["None"] + sorted(pharmacists_df["Name"].tolist()) if not pharmacists_df.empty else ["None"]
@@ -42,12 +51,12 @@ def show_admin_panel(df):
         with st.sidebar.form("availability_form"):
             st.write("Select dates and pharmacists to mark as available.")
 
-            today = datetime.today()
-            end_date = today + timedelta(weeks=num_weeks)
+            start_date, end_date = availability_range
             dates_to_show = []
-            current_date = today
+            current_date = start_date
             while current_date <= end_date:
-                dates_to_show.append(current_date)
+                # convert to datetime before appending
+                dates_to_show.append(datetime.combine(current_date, datetime.min.time()))
                 current_date += timedelta(days=1)
 
             current_availability = {}
@@ -67,6 +76,7 @@ def show_admin_panel(df):
                     }
 
             selected_slots = []
+            cover_requests_df = get_cover_requests_data()
 
             for date in dates_to_show:
                 is_weekend = date.weekday() >= 5
@@ -152,6 +162,17 @@ def show_admin_panel(df):
                                     "booked_info": slot_info,
                                     "pharm_id": i
                                 })
+
+                # Display existing cover requests for this date
+                daily_cover_requests = cover_requests_df[
+                    (cover_requests_df['cover_date'].dt.date == date.date())
+                ].sort_values(by='submission_timestamp')
+
+                if not daily_cover_requests.empty:
+                    st.markdown("**Cover Requests:**")
+                    for _, req_row in daily_cover_requests.iterrows():
+                        st.caption(f"- **{req_row['surgery']}** ({req_row['session']}) requested by {req_row['name']}")
+
 
             submitted = st.form_submit_button("Update Availability")
             if submitted:
@@ -473,7 +494,11 @@ def display_calendar(unbook_mode=False):
     with c2:
         with st.popover(':material/bar_chart:'):
             with st.container(width=700):
-                display_normalized_sessions_plot(get_schedule_data, get_surgeries_data)
+                schedule_data = get_schedule_data()
+                if 'surgery' in schedule_data.columns:
+                    display_normalized_sessions_plot(lambda: schedule_data, get_surgeries_data)
+                else:
+                    st.warning("No surgery data to display.")
 
 
 
@@ -532,6 +557,10 @@ def display_calendar(unbook_mode=False):
     df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
     df = df.dropna(subset=['Date'])
 
+    # All data, sorted, will be the base for filtering
+    df_sorted = df.sort_values(['Date', 'am_pm', 'slot_index'])
+
+    # For 'future requests', we still need to know the last advertised date from today onwards.
     upcoming = df[df['Date'] >= datetime.today()].sort_values(['Date', 'am_pm', 'slot_index'])
 
     if upcoming.empty:
@@ -540,8 +569,39 @@ def display_calendar(unbook_mode=False):
     else:
         last_advertised_date = upcoming['Date'].max().date()
 
+    # Date range slider for timeframe visualization
+    today = datetime.today().date()
+    min_data_date = df['Date'].min().date() if not df.empty else today
+
+    # The slider's start date can be the earlier of the first data point or today.
+    slider_min_date = min(min_data_date, today)
+    # The slider's max date is 3 months from today.
+    slider_max_date = today + timedelta(days=90)
+
+    if 'date_range' not in st.session_state:
+        # Default view is from today to 3 months out.
+        st.session_state.date_range = (today, slider_max_date)
+
+    selected_range = st.slider(
+        "Select a date range to view",
+        min_value=slider_min_date,
+        max_value=slider_max_date,
+        value=st.session_state.date_range,
+        format="ddd, D MMM YYYY"
+    )
+    st.session_state.date_range = selected_range
+
+    # Filter schedule based on the selected date range
+    schedule_filtered = df_sorted[
+        (df_sorted['Date'].dt.date >= selected_range[0]) &
+        (df_sorted['Date'].dt.date <= selected_range[1])
+    ]
+
     # Display existing pharmacist schedule
-    for date, daily in upcoming.groupby(df['Date'].dt.date):
+    if schedule_filtered.empty:
+        st.info("No shifts available in the selected date range.")
+
+    for date, daily in schedule_filtered.groupby(schedule_filtered['Date'].dt.date):
         if date.weekday() >= 5: # Skip weekends for advertised dates
             continue
 
@@ -581,7 +641,7 @@ def display_calendar(unbook_mode=False):
                             if st.button(btn_label, key=unique_key):
                                 show_booking_dialog(row.to_dict())
                 else:
-                    st.button("Not Available", disabled=True, key=f"empty_{date}_am_{i}")
+                    st.button("Not Available", disabled=True, key=f"empty_{date.strftime('%Y%m%d')}_am_{i}")
 
         # PM Shift
         st.markdown("**PM**")
@@ -617,13 +677,14 @@ def display_calendar(unbook_mode=False):
                             if st.button(btn_label, key=unique_key):
                                 show_booking_dialog(row.to_dict())
                 else:
-                    st.button("Not Available", disabled=True, key=f"empty_{date}_pm_{i}")
+                    st.button("Not Available", disabled=True, key=f"empty_{date.strftime('%Y%m%d')}_pm_{i}")
 
         st.divider()
+
     # Add functionality for Practice Managers to submit booking requests beyond the advertised date
     st.header("Submit Future Requests", help="Request sessions beyond the advertised schedule")
     start_date_beyond = last_advertised_date + timedelta(days=1)
-    end_date_beyond = start_date_beyond + timedelta(weeks=14)
+    end_date_beyond = selected_range[1]
 
     cover_requests_df = get_cover_requests_data()
 
