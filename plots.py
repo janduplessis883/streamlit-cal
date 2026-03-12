@@ -4,6 +4,42 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import plotly.express as px # Added for display_plot
 
+
+def _normalized_merge_key(series: pd.Series) -> pd.Series:
+    return series.fillna("").astype(str).str.strip().str.casefold()
+
+
+def _build_normalized_sessions_df(
+    surgery_counts: pd.DataFrame, surgeries_df: pd.DataFrame
+) -> tuple[pd.DataFrame, list[str]]:
+    surgery_sizes = surgeries_df.copy()
+    if "surgery" not in surgery_sizes.columns or "list_size" not in surgery_sizes.columns:
+        return pd.DataFrame(), []
+
+    surgery_sizes["merge_key"] = _normalized_merge_key(surgery_sizes["surgery"])
+    surgery_sizes["list_size"] = pd.to_numeric(surgery_sizes["list_size"], errors="coerce")
+    surgery_sizes = surgery_sizes[
+        (surgery_sizes["merge_key"] != "") & surgery_sizes["list_size"].notna() & (surgery_sizes["list_size"] > 0)
+    ].copy()
+    surgery_sizes = surgery_sizes.drop_duplicates(subset="merge_key", keep="last")
+
+    merged_df = surgery_counts.copy()
+    merged_df["merge_key"] = _normalized_merge_key(merged_df["Surgery"])
+    merged_df = merged_df.merge(
+        surgery_sizes[["merge_key", "list_size"]],
+        on="merge_key",
+        how="left",
+    )
+
+    skipped_surgeries = merged_df.loc[merged_df["list_size"].isna(), "Surgery"].tolist()
+    merged_df = merged_df.dropna(subset=["list_size"]).copy()
+    if merged_df.empty:
+        return pd.DataFrame(), skipped_surgeries
+
+    merged_df["Normalized Sessions"] = (merged_df["Number of Sessions"] / merged_df["list_size"]) * 1000
+    merged_df = merged_df.sort_values("Normalized Sessions", ascending=False)
+    return merged_df, skipped_surgeries
+
 def fair_share_plot(data: pd.DataFrame) -> None:
     """
     Plots a fair share bar chart using the provided DataFrame.
@@ -22,9 +58,7 @@ def fair_share_plot(data: pd.DataFrame) -> None:
 
 def display_plot(df, get_surgeries_data_func):
     st.subheader("Surgery Session Distribution")
-
-    # Moved plot type selection here
-    plot_type = st.sidebar.radio("Select Plot Type", ["Absolute Session Plot", "Normalized Sessions per 1000 pts", "Monthly Sessions"], key="plot_type_radio_in_plot")
+    plot_type = st.session_state.get("plot_type", "Absolute Session Plot")
 
     # Ensure the DataFrame is not empty and contains required columns
     if df.empty or 'surgery' not in df.columns:
@@ -48,11 +82,17 @@ def display_plot(df, get_surgeries_data_func):
             st.warning("List size information is not available. Please add it in the 'Manage Surgeries' section.")
             return
 
-        # Merge dataframes to get list sizes
-        merged_df = pd.merge(surgery_counts, surgeries_df, left_on='Surgery', right_on='surgery', how='left')
-        merged_df['list_size'] = pd.to_numeric(merged_df['list_size'], errors='coerce').fillna(0) # Ensure numeric
-        merged_df['list_size'] = merged_df['list_size'].replace(0, 1) # Avoid division by zero
-        merged_df['Normalized Sessions'] = (merged_df['Number of Sessions'] / merged_df['list_size']) * 1000
+        merged_df, skipped_surgeries = _build_normalized_sessions_df(surgery_counts, surgeries_df)
+        if merged_df.empty:
+            st.warning("No surgeries with a valid positive list size were found, so the normalized plot cannot be displayed.")
+            return
+
+        if skipped_surgeries:
+            st.caption(
+                "Skipped surgeries without a valid positive list size: "
+                + ", ".join(sorted(skipped_surgeries))
+            )
+
         mean_sessions = merged_df['Normalized Sessions'].mean()
         fig2 = px.bar(
             merged_df,
@@ -91,7 +131,7 @@ def display_plot(df, get_surgeries_data_func):
             showlegend=False, # Hide legend as colors are self-explanatory
             xaxis_tickangle=-45 # Angle the x-axis labels for better readability
         )
-    elif plot_type == "Monthly Sessions": # New monthly sessions plot
+    elif plot_type == "Monthly Sessions":
         # Ensure 'Date' column is datetime
         plot_df['Date'] = pd.to_datetime(plot_df['Date'], errors='coerce')
         plot_df = plot_df.dropna(subset=['Date']) # Drop rows with invalid dates
@@ -103,20 +143,22 @@ def display_plot(df, get_surgeries_data_func):
         monthly_sessions = plot_df.groupby(['surgery', 'Month']).size().reset_index(name='Number of Sessions')
         monthly_sessions['Month'] = monthly_sessions['Month'].dt.to_timestamp() # Convert Period to Timestamp for plotting
 
-        fig2 = px.line(
+        fig2 = px.scatter(
             monthly_sessions,
             x='Month',
             y='Number of Sessions',
             color='surgery',
-            title='Number of Sessions per Month per Surgery',
+            title='Monthly Sessions per Surgery',
             labels={'Month': 'Month', 'Number of Sessions': 'Number of Sessions', 'surgery': 'Surgery'},
             template='plotly_white'
         )
         fig2.update_layout(
             xaxis_title="Month",
             yaxis_title="Number of Sessions",
-            hovermode="x unified"
+            hovermode="x unified",
+            height=840
         )
+        fig2.update_traces(marker=dict(size=16, line=dict(width=1, color='white')))
         fig2.update_xaxes(
             dtick="M1", # Show ticks for each month
             tickformat="%b\n%Y" # Format as Jan\n2025
@@ -134,10 +176,16 @@ def display_normalized_sessions_plot(get_schedule_data_func, get_surgeries_data_
         st.warning("List size information is not available. Please add it in the 'Manage Surgeries' section.")
         return
 
-    # Merge dataframes to get list sizes
-    merged_df = pd.merge(surgery_counts, surgeries_df, left_on='Surgery', right_on='surgery', how='left')
-    merged_df['list_size'] = merged_df['list_size'].replace(0, 1) # Avoid division by zero
-    merged_df['Normalized Sessions'] = (merged_df['Number of Sessions'] / merged_df['list_size']) * 1000
+    merged_df, skipped_surgeries = _build_normalized_sessions_df(surgery_counts, surgeries_df)
+    if merged_df.empty:
+        st.warning("No surgeries with a valid positive list size were found, so the normalized plot cannot be displayed.")
+        return
+
+    if skipped_surgeries:
+        st.caption(
+            "Skipped surgeries without a valid positive list size: "
+            + ", ".join(sorted(skipped_surgeries))
+        )
 
     mean_sessions = merged_df['Normalized Sessions'].mean()
 

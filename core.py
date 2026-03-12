@@ -16,6 +16,19 @@ SHEET_NAME = "Sheet1"
 SHEET_NAME_COVER_REQUESTS = "cover_request" # New sheet for cover requests
 SHEET_NAME_SURGERIES = "Sheet2" # New sheet for surgeries
 SHEET_NAME_PHARMACISTS = "Sheet3" # New sheet for pharmacists
+COVER_REQUEST_HEADERS = [
+    "uuid",
+    "cover_date",
+    "surgery",
+    "name",
+    "session",
+    "reason",
+    "desc",
+    "submission_timestamp",
+    "requester_email",
+    "status",
+    "decision_timestamp",
+]
 
 # Authenticate with Google Sheets using st.secrets
 @st.cache_resource
@@ -33,6 +46,29 @@ def get_gspread_client():
 
 client = get_gspread_client()
 
+
+def _get_cover_requests_sheet():
+    try:
+        sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME_COVER_REQUESTS)
+        headers = sheet.row_values(1)
+        if not headers:
+            sheet.update([COVER_REQUEST_HEADERS])
+            return sheet
+
+        missing_headers = [header for header in COVER_REQUEST_HEADERS if header not in headers]
+        if missing_headers:
+            sheet.update([headers + missing_headers])
+        return sheet
+    except gspread.exceptions.WorksheetNotFound:
+        st.warning(f"Worksheet '{SHEET_NAME_COVER_REQUESTS}' not found. Creating it...")
+        sheet = client.open_by_key(SPREADSHEET_ID).add_worksheet(
+            SHEET_NAME_COVER_REQUESTS,
+            rows=1,
+            cols=len(COVER_REQUEST_HEADERS),
+        )
+        sheet.update([COVER_REQUEST_HEADERS])
+        return sheet
+
 def get_schedule_data():
     """Fetch pharmacist schedule data from Google Sheet"""
     try:
@@ -49,50 +85,127 @@ def get_schedule_data():
 def get_cover_requests_data():
     """Fetch cover request data from Google Sheet (cover_request)"""
     try:
-        sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME_COVER_REQUESTS)
+        sheet = _get_cover_requests_sheet()
         with st.spinner("Fetching cover requests..."):
             data = sheet.get_all_records()
 
         # If data is empty, create an empty DataFrame with expected columns
         if not data:
-            df = pd.DataFrame(columns=["uuid", "cover_date", "surgery", "name", "desc", "submission_timestamp"])
+            df = pd.DataFrame(columns=COVER_REQUEST_HEADERS)
         else:
             df = pd.DataFrame(data)
 
-        # Ensure cover_date and submission_timestamp are datetime objects
+        # Ensure datetime fields are datetime objects
         if 'cover_date' in df.columns:
             df['cover_date'] = pd.to_datetime(df['cover_date'], errors='coerce')
         if 'submission_timestamp' in df.columns:
             df['submission_timestamp'] = pd.to_datetime(df['submission_timestamp'], errors='coerce')
+        if 'decision_timestamp' in df.columns:
+            df['decision_timestamp'] = pd.to_datetime(df['decision_timestamp'], errors='coerce')
+        if 'requester_email' in df.columns:
+            df['requester_email'] = df['requester_email'].fillna("").astype(str).str.strip()
+            df.loc[df['requester_email'].str.casefold() == 'nan', 'requester_email'] = ""
+        if 'status' in df.columns:
+            df['status'] = df['status'].fillna("").astype(str).str.strip()
+            df.loc[df['status'].str.casefold() == 'nan', 'status'] = ""
 
         # Ensure the DataFrame always has the expected columns, even if empty
-        expected_columns = ["uuid", "cover_date", "surgery", "name", "session", "reason", "desc", "submission_timestamp"]
-        for col in expected_columns:
+        for col in COVER_REQUEST_HEADERS:
             if col not in df.columns:
                 df[col] = None # Add missing columns
 
         return df
-    except gspread.exceptions.WorksheetNotFound:
-        st.warning(f"Worksheet '{SHEET_NAME_COVER_REQUESTS}' not found. Creating it...")
-        sheet = client.open_by_key(SPREADSHEET_ID).add_worksheet(SHEET_NAME_COVER_REQUESTS, rows=1, cols=8)
-        sheet.update([["uuid", "cover_date", "surgery", "name", "session", "reason", "desc", "submission_timestamp"]])
-        # Return a DataFrame with expected columns after creating the sheet
-        return pd.DataFrame(columns=["uuid", "cover_date", "surgery", "name", "session", "reason", "desc", "submission_timestamp"])
     except Exception as e:
         st.error(f"An error occurred while reading cover requests data from Google Sheet: {e}")
-        return pd.DataFrame(columns=["uuid", "cover_date", "surgery", "name", "session", "reason", "desc", "submission_timestamp"]) # Ensure columns are always returned
+        return pd.DataFrame(columns=COVER_REQUEST_HEADERS) # Ensure columns are always returned
 
-def add_cover_request_data(cover_date, surgery, name, session, reason, desc):
+def add_cover_request_data(cover_date, surgery, name, requester_email, session, reason, desc):
     """Add a new cover request to Google Sheet (cover_request)"""
     try:
-        sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME_COVER_REQUESTS)
+        sheet = _get_cover_requests_sheet()
+        headers = sheet.row_values(1)
         new_uuid = str(uuid.uuid4())
         submission_timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        sheet.append_row([new_uuid, cover_date.strftime('%Y-%m-%d'), surgery, name, session, reason, desc, submission_timestamp])
+        new_row_data = {
+            "uuid": new_uuid,
+            "cover_date": cover_date.strftime('%Y-%m-%d'),
+            "surgery": surgery,
+            "name": name,
+            "session": session,
+            "reason": reason,
+            "desc": desc,
+            "submission_timestamp": submission_timestamp,
+            "requester_email": requester_email,
+            "status": "Pending",
+            "decision_timestamp": "",
+        }
+        ordered_row_values = [new_row_data.get(header, "") for header in headers]
+        sheet.append_row(ordered_row_values, value_input_option=ValueInputOption.raw)
         st.success("Cover request submitted successfully!")
         get_cover_requests_data.clear() # Clear cache to refresh data
     except Exception as e:
         st.error(f"An error occurred while adding cover request data to Google Sheet: {e}")
+
+
+def reject_cover_request(request_uuid):
+    """Reject a cover request, email the requester, and persist the rejected status."""
+    try:
+        sheet = _get_cover_requests_sheet()
+        headers = sheet.row_values(1)
+        request_cell = sheet.find(request_uuid)
+
+        if not request_cell:
+            st.error("Could not find the cover request to reject.")
+            return False
+
+        row_values = sheet.row_values(request_cell.row)
+        row_data = {
+            header: row_values[idx] if idx < len(row_values) else ""
+            for idx, header in enumerate(headers)
+        }
+
+        current_status = str(row_data.get("status", "")).strip().casefold()
+        if current_status == "rejected":
+            st.info("This request has already been rejected.")
+            return False
+
+        requester_email = str(row_data.get("requester_email", "")).strip()
+        requester_name = str(row_data.get("name", "")).strip() or "there"
+        surgery_name = str(row_data.get("surgery", "")).strip() or "your practice"
+        cover_date = pd.to_datetime(row_data.get("cover_date"), errors="coerce")
+        cover_date_str = cover_date.strftime("%A, %d %B %Y") if pd.notna(cover_date) else "the requested date"
+
+        if not requester_email:
+            st.error("This request does not include a requester email, so a rejection email cannot be sent.")
+            return False
+
+        rejection_html = f"""
+        <p>Dear {requester_name},</p>
+        <p>Thank you for your request for pharmacy support for <b>{surgery_name}</b> on <b>{cover_date_str}</b>.</p>
+        <p>We are sorry to let you know that we have been unable to accommodate this request due to current scheduling constraints. Session requests are prioritised according to operational need and availability.</p>
+        <p>We appreciate your understanding and apologise that we could not support this request on this occasion.</p>
+        <p>Kind regards,<br>Pharma-Cal automated notifications<br>Brompton Health PCN</p>
+        """
+        email_sent = send_resend_email(
+            requester_email,
+            f"Update on your Pharma-Cal request for {cover_date_str}",
+            rejection_html,
+        )
+        if not email_sent:
+            return False
+
+        status_col_idx = headers.index("status") + 1
+        decision_timestamp_col_idx = headers.index("decision_timestamp") + 1
+        rejection_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        sheet.update_cell(request_cell.row, status_col_idx, "Rejected")
+        sheet.update_cell(request_cell.row, decision_timestamp_col_idx, rejection_timestamp)
+
+        get_cover_requests_data.clear()
+        st.success(f"Rejection email sent to {requester_name} and request marked as rejected.")
+        return True
+    except Exception as e:
+        st.error(f"An error occurred while rejecting the cover request: {e}")
+        return False
 
 @st.cache_data(ttl=3600) # Cache for 1 hour
 def get_surgeries_data():

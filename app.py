@@ -2,26 +2,285 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, timedelta
 import gspread
-from gspread.utils import ValueInputOption # Import ValueInputOption from gspread.utils
-from google.oauth2.service_account import Credentials
+from gspread.utils import ValueInputOption
+from html import escape
 import time
-import os
-import resend
-import uuid # Import uuid for generating unique IDs
-from typing import Any # Import Any for type hinting
-import plotly.express as px
 
 # Local Imports
-from plots import fair_share_plot, display_plot, display_normalized_sessions_plot
-from core import client, get_gspread_client # Import client and get_gspread_client from core.py
+from plots import display_plot, display_normalized_sessions_plot
+from core import client
 
 # Google Sheet details
-from core import SPREADSHEET_ID, SHEET_NAME, SHEET_NAME_COVER_REQUESTS, SHEET_NAME_SURGERIES, SHEET_NAME_PHARMACISTS, get_schedule_data, get_cover_requests_data, add_cover_request_data, get_surgeries_data, add_surgery_data, delete_surgery_data, get_pharmacists_data, add_pharmacist_data, delete_pharmacist_data, generate_ics_file, send_resend_email, cancel_booking, update_booking # Import from core.py
+from core import SPREADSHEET_ID, SHEET_NAME, get_schedule_data, get_cover_requests_data, add_cover_request_data, get_surgeries_data, add_surgery_data, delete_surgery_data, get_pharmacists_data, add_pharmacist_data, delete_pharmacist_data, cancel_booking, update_booking, reject_cover_request
+
+
+def _clean_string_values(df: pd.DataFrame, column: str) -> list[str]:
+    if df.empty or column not in df.columns:
+        return []
+
+    cleaned = df[column].dropna().astype(str).str.strip()
+    return sorted(value for value in cleaned.unique().tolist() if value)
+
+
+def _normalize_schedule_data(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df.copy()
+
+    normalized = df.copy()
+    if "Date" not in normalized.columns:
+        return pd.DataFrame()
+
+    normalized["Date"] = pd.to_datetime(normalized["Date"], errors="coerce")
+    normalized = normalized.dropna(subset=["Date"]).copy()
+
+    if normalized.empty:
+        return normalized
+
+    if "am_pm" not in normalized.columns:
+        normalized["am_pm"] = ""
+    normalized["am_pm"] = normalized["am_pm"].fillna("").astype(str).str.strip().str.lower()
+
+    fallback_slot_index = normalized.groupby(
+        [normalized["Date"].dt.date, normalized["am_pm"]]
+    ).cumcount()
+
+    slot_index = pd.Series(float("nan"), index=normalized.index, dtype="float64")
+    if "slot_index" in normalized.columns:
+        slot_index = pd.to_numeric(normalized["slot_index"], errors="coerce")
+    elif "pharm" in normalized.columns:
+        slot_index = pd.to_numeric(normalized["pharm"], errors="coerce") - 1
+
+    normalized["slot_index"] = slot_index.where(slot_index.notna(), fallback_slot_index).astype(int)
+
+    pharmacist_names = pd.Series("", index=normalized.index, dtype="object")
+    if "pharmacist_name" in normalized.columns:
+        pharmacist_names = normalized["pharmacist_name"].fillna("").astype(str)
+    elif "pharm" in normalized.columns:
+        pharmacist_names = normalized["pharm"].fillna("").astype(str)
+
+    pharmacist_names = pharmacist_names.str.strip()
+    normalized["pharmacist_name"] = pharmacist_names.where(pharmacist_names != "", "None")
+
+    return normalized
+
+
+def _apply_app_theme() -> None:
+    st.markdown(
+        """
+        <style>
+        :root {
+            --app-ink: #1f2937;
+            --app-muted: #64748b;
+            --app-border: #dbe4ee;
+            --app-surface: #f8fafc;
+            --app-accent: #0f766e;
+            --app-accent-soft: #e6fffb;
+        }
+
+        .stApp .block-container {
+            padding-top: 3rem;
+            padding-bottom: 2.75rem;
+        }
+
+        [data-testid="stSidebar"] .block-container {
+            padding-top: 1rem;
+            padding-bottom: 1.75rem;
+        }
+
+        [data-testid="stForm"] {
+            border: 1px solid var(--app-border);
+            background: #ffffff;
+            border-radius: 16px;
+            padding: 0.85rem 0.9rem 1rem;
+        }
+
+        .stButton > button,
+        .stForm button {
+            border-radius: 12px;
+            font-weight: 600;
+        }
+
+        .app-section {
+            margin: 0.35rem 0 0.9rem;
+        }
+
+        .app-section-kicker {
+            color: var(--app-accent);
+            font-size: 0.74rem;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            margin-bottom: 0.15rem;
+        }
+
+        .app-section-title {
+            color: var(--app-ink);
+            font-size: 1.15rem;
+            font-weight: 700;
+            line-height: 1.2;
+        }
+
+        .app-section-copy {
+            color: var(--app-muted);
+            font-size: 0.92rem;
+            margin-top: 0.2rem;
+        }
+
+        .app-hero {
+            background: linear-gradient(135deg, #eefaf8 0%, #f8fbfc 100%);
+            border: 1px solid #cfe3e0;
+            border-radius: 18px;
+            color: var(--app-ink);
+            margin: 0.25rem 0 1.25rem;
+            padding: 1rem 1.1rem;
+            box-shadow: 0 8px 18px rgba(15, 23, 42, 0.06);
+        }
+
+        .app-hero-kicker {
+            color: var(--app-accent);
+            font-size: 0.74rem;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        .app-hero-title {
+            font-size: 1.65rem;
+            font-weight: 800;
+            line-height: 1.15;
+            margin-top: 0.25rem;
+            color: var(--app-ink);
+        }
+
+        .app-hero-copy {
+            color: var(--app-muted);
+            font-size: 0.95rem;
+            margin-top: 0.3rem;
+        }
+
+        .app-band {
+            background: linear-gradient(135deg, #ecfeff 0%, #f8fafc 100%);
+            border: 1px solid #cfe8e8;
+            border-radius: 16px;
+            margin: 1.15rem 0 1rem;
+            padding: 0.85rem 1rem 0.9rem;
+        }
+
+        .app-band-kicker {
+            color: var(--app-accent);
+            font-size: 0.72rem;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        .app-band-title {
+            color: var(--app-ink);
+            font-size: 1.3rem;
+            font-weight: 800;
+            line-height: 1.15;
+            margin-top: 0.18rem;
+        }
+
+        .app-band-copy {
+            color: var(--app-muted);
+            font-size: 0.94rem;
+            margin-top: 0.22rem;
+        }
+
+        .slot-header {
+            min-height: 2.9rem;
+            display: flex;
+            align-items: flex-end;
+            margin-bottom: 0.5rem;
+            font-size: 0.98rem;
+            line-height: 1.2;
+        }
+
+        .slot-header--name {
+            color: #b86200;
+            font-size: 1.05rem;
+            font-weight: 700;
+        }
+
+        .slot-header--available {
+            color: var(--app-ink);
+            font-weight: 700;
+        }
+
+        .slot-header--empty {
+            color: transparent;
+        }
+
+        .slot-footer {
+            min-height: 1.75rem;
+            margin-top: 0.55rem;
+            font-size: 0.92rem;
+            line-height: 1.25;
+        }
+
+        .slot-footer--filled {
+            color: #7c8699;
+        }
+
+        .slot-footer--empty {
+            color: transparent;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_section_header(title: str, eyebrow: str | None = None, copy: str | None = None, *, sidebar: bool = False) -> None:
+    target = st.sidebar if sidebar else st
+    eyebrow_html = f"<div class='app-section-kicker'>{eyebrow}</div>" if eyebrow else ""
+    copy_html = f"<div class='app-section-copy'>{copy}</div>" if copy else ""
+    target.markdown(
+        f"<div class='app-section'>{eyebrow_html}<div class='app-section-title'>{title}</div>{copy_html}</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _render_section_band(title: str, eyebrow: str | None = None, copy: str | None = None) -> None:
+    eyebrow_html = f"<div class='app-band-kicker'>{eyebrow}</div>" if eyebrow else ""
+    copy_html = f"<div class='app-band-copy'>{copy}</div>" if copy else ""
+    st.markdown(
+        f"<div class='app-band'>{eyebrow_html}<div class='app-band-title'>{title}</div>{copy_html}</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _render_slot_header(pharmacist_name: str | None, *, available_slot: bool) -> None:
+    if pharmacist_name and pharmacist_name != "None":
+        content = escape(str(pharmacist_name))
+        css_class = "slot-header slot-header--name"
+    elif available_slot:
+        content = "Available"
+        css_class = "slot-header slot-header--available"
+    else:
+        content = "&nbsp;"
+        css_class = "slot-header slot-header--empty"
+
+    st.markdown(f"<div class='{css_class}'>{content}</div>", unsafe_allow_html=True)
+
+
+def _render_slot_footer(details: str | None = None) -> None:
+    if details and str(details).strip():
+        content = escape(str(details).strip())
+        css_class = "slot-footer slot-footer--filled"
+    else:
+        content = "&nbsp;"
+        css_class = "slot-footer slot-footer--empty"
+
+    st.markdown(f"<div class='{css_class}'>{content}</div>", unsafe_allow_html=True)
 
 
 def show_admin_panel(df):
+    df = _normalize_schedule_data(df)
     unbook_mode = False  # Default value
-    admin_tab = st.sidebar.radio("Admin Options", ["Manage Availability", "View Future Requests", "Manage Surgeries", "Manage Pharmacists", "Surgery Session Plots"], key="admin_options_radio")
+    _render_section_header("Admin Options", eyebrow="Workspace", copy="Manage scheduling, directory data, and analytics.", sidebar=True)
+    admin_tab = st.sidebar.radio("Admin Options", ["Manage Availability", "View Future Requests", "Manage Surgeries", "Manage Pharmacists", "Surgery Session Plots"], key="admin_options_radio", width="stretch")
 
     if admin_tab == "Surgery Session Plots":
         st.session_state.view = 'plot'
@@ -31,8 +290,8 @@ def show_admin_panel(df):
         st.session_state.view = 'calendar'
 
     if admin_tab == "Manage Availability":
-        st.sidebar.subheader("Manage Availability")
-        unbook_mode = st.sidebar.toggle("Unbook Mode", value=False)
+        _render_section_header("Manage Availability", eyebrow="Scheduling", copy="Assign pharmacist availability and protect booked slots.", sidebar=True)
+        unbook_mode = st.sidebar.toggle("Unbook Mode", value=False, width="stretch")
 
         today = datetime.today().date()
         three_months_later = today + timedelta(days=90)
@@ -42,14 +301,15 @@ def show_admin_panel(df):
             min_value=today,
             max_value=three_months_later,
             value=(today, today + timedelta(weeks=4)),
-            format="ddd, D MMM YYYY"
+            format="ddd, D MMM YYYY",
+            width="stretch"
         )
 
         pharmacists_df = get_pharmacists_data()
-        pharmacist_names = ["None"] + sorted(pharmacists_df["Name"].tolist()) if not pharmacists_df.empty else ["None"]
+        pharmacist_names = ["None", *_clean_string_values(pharmacists_df, "Name")]
 
         with st.sidebar.form("availability_form"):
-            st.write("Select dates and pharmacists to mark as available.")
+            st.caption("Select the dates and pharmacist slots you want to publish.")
 
             start_date, end_date = availability_range
             dates_to_show = []
@@ -62,9 +322,7 @@ def show_admin_panel(df):
             current_availability = {}
             if not df.empty:
                 df_copy = df.copy()
-                if 'slot_index' not in df_copy.columns:
-                    df_copy['slot_index'] = df_copy.groupby(['Date', 'am_pm']).cumcount()
-                df_copy['Date'] = pd.to_datetime(df_copy['Date']).dt.date
+                df_copy['Date'] = df_copy['Date'].dt.date
                 for _, row in df_copy.iterrows():
                     key = (row['Date'], int(row['slot_index']), row['am_pm'])
                     current_availability[key] = {
@@ -75,7 +333,7 @@ def show_admin_panel(df):
                         'pharmacist_name': row.get('pharmacist_name', 'None')
                     }
 
-            selected_slots = []
+            get_cover_requests_data.clear()
             cover_requests_df = get_cover_requests_data()
 
             for date in dates_to_show:
@@ -116,15 +374,6 @@ def show_admin_panel(df):
                                 disabled=is_weekend or is_booked
                             )
 
-                            if not is_weekend and selected_pharmacist != "None":
-                                selected_slots.append({
-                                    "date": date,
-                                    "am_pm": shift_type,
-                                    "pharmacist_name": selected_pharmacist,
-                                    "booked_info": slot_info,
-                                    "pharm_id": i
-                                })
-
                     st.markdown("PM")
                     cols_pm = st.columns(3)
                     for i, col in enumerate(cols_pm):
@@ -154,27 +403,49 @@ def show_admin_panel(df):
                                 disabled=is_weekend or is_booked
                             )
 
-                            if not is_weekend and selected_pharmacist != "None":
-                                selected_slots.append({
-                                    "date": date,
-                                    "am_pm": shift_type,
-                                    "pharmacist_name": selected_pharmacist,
-                                    "booked_info": slot_info,
-                                    "pharm_id": i
-                                })
-
                 # Display existing cover requests for this date
-                daily_cover_requests = cover_requests_df[
-                    (cover_requests_df['cover_date'].dt.date == date.date())
-                ].sort_values(by='submission_timestamp')
+                if 'cover_date' in cover_requests_df.columns and 'submission_timestamp' in cover_requests_df.columns:
+                    daily_cover_requests = cover_requests_df[
+                        cover_requests_df['cover_date'].dt.date == date.date()
+                    ].sort_values(by='submission_timestamp')
+                else:
+                    daily_cover_requests = pd.DataFrame()
 
                 if not daily_cover_requests.empty:
                     st.markdown("**Cover Requests:**")
                     for _, req_row in daily_cover_requests.iterrows():
-                        st.caption(f"- **{req_row['surgery']}** ({req_row['session']}) requested by {req_row['name']}")
+                        request_uuid = str(req_row.get('uuid', '')).strip()
+                        request_status = str(req_row.get('status', '') or 'Pending').strip()
+                        requester_email = str(req_row.get('requester_email', '') or '').strip()
+                        action_disabled = request_status.casefold() == 'rejected' or not requester_email or not request_uuid
+
+                        info_col, action_col = st.columns([0.72, 0.28])
+                        with info_col:
+                            st.caption(f"- **{req_row['surgery']}** ({req_row['session']}) requested by {req_row['name']}")
+                        with action_col:
+                            if request_status.casefold() == 'rejected':
+                                st.caption("Rejected")
+                                reject_clicked = False
+                            elif not requester_email:
+                                st.caption("Email missing")
+                                reject_clicked = False
+                            else:
+                                st.caption("Reject request")
+                                reject_clicked = st.form_submit_button(
+                                    "Reject",
+                                    key=f"reject_cover_request_{request_uuid or req_row.name}",
+                                    type="tertiary",
+                                    disabled=action_disabled,
+                                    use_container_width=True,
+                                )
+
+                        if reject_clicked and request_uuid:
+                            if reject_cover_request(request_uuid):
+                                time.sleep(0.3)
+                                st.rerun()
 
 
-            submitted = st.form_submit_button("Update Availability")
+            submitted = st.form_submit_button("Update Availability", type="primary", icon=":material/save:", use_container_width=True)
             if submitted:
                 EXPECTED_HEADERS = ["unique_code", "Date", "am_pm", "booked", "surgery", "email", "pharmacist_name", "slot_index"]
                 try:
@@ -275,12 +546,12 @@ def show_admin_panel(df):
                     st.error(f"An error occurred while updating availability: {e}")
 
     elif admin_tab == "Manage Surgeries":
-        st.sidebar.subheader("Add New Surgery")
+        _render_section_header("Manage Surgeries", eyebrow="Directory", copy="Keep the surgery directory and list sizes up to date.", sidebar=True)
         with st.sidebar.form("add_surgery_form", clear_on_submit=True):
             new_surgery_name = st.text_input("Surgery Name")
             new_surgery_email = st.text_input("Email Address")
             new_list_size = st.number_input("List Size", min_value=0, step=1)
-            add_surgery_submitted = st.form_submit_button("Add Surgery")
+            add_surgery_submitted = st.form_submit_button("Add Surgery", type="primary", icon=":material/add:", use_container_width=True)
 
             if add_surgery_submitted:
                 if new_surgery_name and new_surgery_email:
@@ -288,26 +559,29 @@ def show_admin_panel(df):
                 else:
                     st.error("Both surgery name and email are required.")
 
-        st.sidebar.subheader("Existing Surgeries")
+        st.sidebar.caption("Existing surgeries")
         surgeries_df = get_surgeries_data()
-        if not surgeries_df.empty:
+        if not surgeries_df.empty and {'surgery', 'email'}.issubset(surgeries_df.columns):
+            surgeries_df = surgeries_df.assign(
+                surgery_sort=surgeries_df["surgery"].fillna("").astype(str).str.strip().str.casefold()
+            ).sort_values("surgery_sort", kind="stable")
             for idx, row in surgeries_df.iterrows():
                 col1, col2 = st.sidebar.columns([0.8, 0.2])
                 with col1:
-                    st.markdown(f"{idx + 1}. **{row['surgery']}**: {row['email']}")
+                    st.markdown(f"**{row['surgery']}**<br>{row['email']}", unsafe_allow_html=True)
                 with col2:
-                    if st.button(":material/delete:", key=f"delete_surgery_{idx}"):
+                    if st.button(":material/delete:", key=f"delete_surgery_{idx}", type="tertiary", use_container_width=True):
                         delete_surgery_data(row['surgery'], row['email'])
                         st.rerun()
         else:
             st.sidebar.info("No surgeries saved yet.")
 
     elif admin_tab == "Manage Pharmacists":
-        st.sidebar.subheader("Add New Pharmacist")
+        _render_section_header("Manage Pharmacists", eyebrow="Directory", copy="Maintain the pharmacist list used across bookings and emails.", sidebar=True)
         with st.sidebar.form("add_pharmacist_form", clear_on_submit=True):
             new_pharmacist_name = st.text_input("Pharmacist Name")
             new_pharmacist_email = st.text_input("Pharmacist Email")
-            add_pharmacist_submitted = st.form_submit_button("Add Pharmacist")
+            add_pharmacist_submitted = st.form_submit_button("Add Pharmacist", type="primary", icon=":material/add:", use_container_width=True)
 
             if add_pharmacist_submitted:
                 if new_pharmacist_name and new_pharmacist_email:
@@ -315,28 +589,33 @@ def show_admin_panel(df):
                 else:
                     st.error("Pharmacist name is required.")
 
-        st.sidebar.subheader("Existing Pharmacists")
+        st.sidebar.caption("Existing pharmacists")
         pharmacists_df = get_pharmacists_data()
-        if not pharmacists_df.empty:
+        if not pharmacists_df.empty and {'Name', 'Email'}.issubset(pharmacists_df.columns):
+            pharmacists_df = pharmacists_df.assign(
+                pharmacist_sort=pharmacists_df["Name"].fillna("").astype(str).str.strip().str.casefold()
+            ).sort_values("pharmacist_sort", kind="stable")
             for idx, row in pharmacists_df.iterrows():
                 col1, col2 = st.sidebar.columns([0.8, 0.2])
                 with col1:
-                    st.markdown(f"{idx + 1}. **{row['Name']}**<br>{row['Email']}", unsafe_allow_html=True)
+                    st.markdown(f"**{row['Name']}**<br>{row['Email']}", unsafe_allow_html=True)
                 with col2:
-                    if st.button(":material/delete:", key=f"delete_pharmacist_{idx}"):
+                    if st.button(":material/delete:", key=f"delete_pharmacist_{idx}", type="tertiary", use_container_width=True):
                         delete_pharmacist_data(row['Name'], row['Email'])
                         st.rerun()
         else:
             st.sidebar.info("No pharmacists saved yet.")
     elif admin_tab == "Surgery Session Plots":
-        st.sidebar.subheader("Surgery Session Plots")
-        st.session_state.plot_type = st.sidebar.radio("Select Plot Type", ["Absolute Session Plot", "Normalized Sessions per 1000 pts", "Monthly Sessions"])
+        _render_section_header("Surgery Session Plots", eyebrow="Analytics", copy="Switch between activity views using a single control.", sidebar=True)
+        st.session_state.plot_type = st.sidebar.radio("Select Plot Type", ["Absolute Session Plot", "Normalized Sessions per 1000 pts", "Monthly Sessions"], width="stretch")
     elif admin_tab == "View Future Requests":
-        st.header(":material/event_upcoming: Future Cover Requests")
-        st.sidebar.subheader("Future Cover Requests")
+        _render_section_header("Future Cover Requests", eyebrow="Admin Review", copy="Requests from today onward ordered by submission time.")
+        _render_section_header("Future Cover Requests", eyebrow="Requests", copy="Review upcoming requests from the sidebar workspace.", sidebar=True)
+        get_cover_requests_data.clear()
         cover_requests_df = get_cover_requests_data()
 
-        if not cover_requests_df.empty:
+        required_columns = {'cover_date', 'surgery', 'name', 'session', 'reason', 'desc', 'submission_timestamp', 'status'}
+        if not cover_requests_df.empty and required_columns.issubset(cover_requests_df.columns):
             # Filter for requests from today and the future
             today = datetime.today().date()
             future_requests = cover_requests_df[
@@ -344,7 +623,7 @@ def show_admin_panel(df):
             ].sort_values(by='submission_timestamp')
 
             if not future_requests.empty:
-                st.dataframe(future_requests[['cover_date', 'surgery', 'name', 'session', 'reason', 'desc', 'submission_timestamp']], use_container_width=True)
+                st.dataframe(future_requests[['cover_date', 'surgery', 'name', 'session', 'reason', 'desc', 'status', 'submission_timestamp']], use_container_width=True)
             else:
                 st.info("No future cover requests found.")
         else:
@@ -360,62 +639,56 @@ def show_booking_dialog(slot):
     st.markdown(f"**Booking: {pharmacist_name} — {shift} on {pd.to_datetime(slot['Date']).strftime('%Y-%m-%d')}**")
 
     surgeries_df = get_surgeries_data()
-    surgery_names = ["Add New Surgery"] + sorted(surgeries_df["surgery"].tolist()) if not surgeries_df.empty else ["Add New Surgery"]
+    surgery_names = _clean_string_values(surgeries_df, "surgery")
+    if not surgery_names:
+        st.warning("No surgeries are configured yet. Add a surgery in the Admin Panel before booking.")
+        return
+    selected_surgery_option = st.selectbox(
+        "Select Surgery",
+        surgery_names,
+        key=f"select_surgery_{slot['unique_code']}"
+    )
 
-    with st.form(key=f"form_dialog_{slot['unique_code']}"):
-        selected_surgery_option = st.selectbox(
-            "Select Surgery",
-            surgery_names,
-            key=f"select_surgery_{slot['unique_code']}"
-        )
+    if "surgery" in surgeries_df.columns:
+        selected_surgery_row = surgeries_df[surgeries_df["surgery"] == selected_surgery_option]
+    else:
+        selected_surgery_row = pd.DataFrame()
 
-        manual_surgery_input = ""
-        manual_email_input = ""
+    prefilled_email = ""
+    if "email" in surgeries_df.columns and not selected_surgery_row.empty:
+        prefilled_email = str(selected_surgery_row["email"].iloc[0]).strip()
 
-        if selected_surgery_option == "Add New Surgery":
-            manual_surgery_input = st.text_input("New Surgery Name", key=f"new_surgery_name_{slot['unique_code']}")
-            manual_email_input = st.text_input("New Email Address", key=f"new_email_address_{slot['unique_code']}")
-            current_surgery = manual_surgery_input
-            current_email = manual_email_input
+    st.text_input("Surgery Name", value=selected_surgery_option, disabled=True, key=f"display_surgery_{slot['unique_code']}_{selected_surgery_option}")
+    st.text_input("Email Address", value=prefilled_email, disabled=True, key=f"display_email_{slot['unique_code']}_{selected_surgery_option}")
+
+    current_surgery = selected_surgery_option
+    current_email = prefilled_email
+
+    action_left, action_right = st.columns(2)
+    cancel_button = action_left.button("Cancel", type="secondary", use_container_width=True, key=f"cancel_booking_dialog_{slot['unique_code']}")
+    submitted = action_right.button("Submit Booking", type="primary", icon=":material/check_circle:", use_container_width=True, key=f"submit_booking_dialog_{slot['unique_code']}")
+
+    if submitted:
+        if not current_surgery or not current_email:
+            st.error("All fields are required.")
         else:
-            # Pre-fill with selected surgery's email
-            selected_surgery_row = surgeries_df[surgeries_df["surgery"] == selected_surgery_option]
-            prefilled_email = selected_surgery_row["email"].iloc[0] if not selected_surgery_row.empty else ""
+            update_booking(slot, current_surgery, current_email)
+            st.success("Booking saved successfully!")
+            time.sleep(1.5)
+            st.rerun() # Rerun to close dialog and refresh main app
 
-            st.text_input("Surgery Name", value=selected_surgery_option, disabled=True, key=f"display_surgery_{slot['unique_code']}")
-            st.text_input("Email Address", value=prefilled_email, disabled=True, key=f"display_email_{slot['unique_code']}")
-            current_surgery = selected_surgery_option
-            current_email = prefilled_email
-
-        col1, col2 = st.columns(2)
-        submitted = col1.form_submit_button("Submit Booking")
-        cancel_button = col2.form_submit_button("Cancel")
-
-        if submitted:
-            if not current_surgery or not current_email:
-                st.error("All fields are required.")
-            else:
-                # If a new surgery was added, save it to Sheet2
-                # Removed add_surgery_data call from here as it's meant for admin panel
-                # If selected_surgery_option is "Add New Surgery", the user should be directed to admin panel
-                # or a separate flow for adding new surgeries.
-                if selected_surgery_option == "Add New Surgery":
-                    st.error("Please add new surgeries via the Admin Panel before booking.")
-                else:
-                    update_booking(slot, current_surgery, current_email)
-                    st.success("Booking saved successfully!")
-                    time.sleep(1.5)
-                    st.rerun() # Rerun to close dialog and refresh main app
-
-        if cancel_button:
-            st.rerun() # Rerun to close dialog
+    if cancel_button:
+        st.rerun() # Rerun to close dialog
 
 @st.dialog("Request Cover")
 def show_cover_request_dialog(cover_date):
     st.markdown(f"Requesting cover for: **{cover_date.strftime('%A, %d %B %Y')}**")
 
     surgeries_df = get_surgeries_data()
-    surgery_names = sorted(surgeries_df["surgery"].tolist()) if not surgeries_df.empty else []
+    surgery_names = _clean_string_values(surgeries_df, "surgery")
+    if not surgery_names:
+        st.warning("No surgeries are configured yet. Add one in the Admin Panel before submitting a cover request.")
+        return
 
     with st.form(key=f"form_cover_request_{cover_date.strftime('%Y%m%d')}"):
         selected_surgery = st.selectbox(
@@ -426,6 +699,10 @@ def show_cover_request_dialog(cover_date):
         requested_by_name = st.text_input(
             "Requested by (Your Name)",
             key=f"cover_name_{cover_date.strftime('%Y%m%d')}"
+        )
+        requested_by_email = st.text_input(
+            "Requester Email",
+            key=f"cover_email_{cover_date.strftime('%Y%m%d')}"
         )
 
         selected_session = st.selectbox(
@@ -448,9 +725,9 @@ def show_cover_request_dialog(cover_date):
                 key=f"other_reason_text_{cover_date.strftime('%Y%m%d')}"
             )
 
-        col1, col2 = st.columns(2)
-        submitted = col1.form_submit_button("Submit Request")
-        cancel_button = col2.form_submit_button("Cancel")
+        action_left, action_right = st.columns(2)
+        cancel_button = action_left.form_submit_button("Cancel", type="secondary", use_container_width=True)
+        submitted = action_right.form_submit_button("Submit Request", type="primary", icon=":material/send:", use_container_width=True)
 
         if submitted:
             final_reason = selected_reason
@@ -465,10 +742,10 @@ def show_cover_request_dialog(cover_date):
             else:
                 final_description = selected_reason # Use the selected reason as description if not "Other"
 
-            if not selected_surgery or not requested_by_name or not selected_session or not final_reason:
+            if not selected_surgery or not requested_by_name or not requested_by_email or not selected_session or not final_reason:
                 st.error("All fields are required.")
             else:
-                add_cover_request_data(cover_date, selected_surgery, requested_by_name, selected_session, final_reason, final_description)
+                add_cover_request_data(cover_date, selected_surgery, requested_by_name, requested_by_email, selected_session, final_reason, final_description)
                 time.sleep(0.2)
                 st.rerun() # Rerun to close dialog and refresh main app
 
@@ -481,6 +758,7 @@ st.set_page_config(page_title="Pharma-Cal Brompton Heatlh PCN", layout="centered
 
 
 def display_calendar(unbook_mode=False):
+    _apply_app_theme()
     c1, c2, c3 = st.columns([0.25, 0.25, 2], gap="small")
     with c1:
         with st.popover(':material/info:'):
@@ -510,23 +788,7 @@ def display_calendar(unbook_mode=False):
     password = st.sidebar.text_input("", type="password", placeholder="Admin Login", label_visibility="collapsed", icon=":material/settings:")  # Admin password input
     if password == '':
         st.sidebar.image('images/logo22.png')
-    df = get_schedule_data()
-
-    if not df.empty:
-        if 'slot_index' not in df.columns:
-            if 'pharm' in df.columns and pd.api.types.is_numeric_dtype(df['pharm']):
-                df['slot_index'] = df['pharm'].astype(int) - 1
-            else:
-                df['slot_index'] = df.groupby(['Date', 'am_pm']).cumcount()
-
-        if 'pharmacist_name' not in df.columns:
-            if 'pharm' in df.columns:
-                if pd.api.types.is_numeric_dtype(df['pharm']):
-                    df['pharmacist_name'] = df['pharm'].astype(str)
-                else:
-                    df['pharmacist_name'] = df['pharm']
-            else:
-                df['pharmacist_name'] = "Pharmacist"
+    df = _normalize_schedule_data(get_schedule_data())
 
     # Initialize view state if not already set
     if 'view' not in st.session_state:
@@ -549,13 +811,19 @@ def display_calendar(unbook_mode=False):
         return
 
     # --- Main Calendar Display ---
-    st.html("<div class='status' style='background-color: #334155; color: #fafafa; padding-top: 6px; padding-bottom: 6px; padding-left: 20px; padding-right: 20px; border-radius: 10px; font-family: Arial, sans-serif; font-size: 26px; display: inline-block; text-align: center; box-shadow: 0px 2px 3px rgba(0, 0, 0, 0.5);'>Request a <b>Pharmacist Session</b> - BH PCN</B></div>")
+    st.markdown(
+        """
+        <div class="app-hero">
+            <div class="app-hero-kicker">Brompton Health PCN</div>
+            <div class="app-hero-title">Request a Pharmacist Session</div>
+            <div class="app-hero-copy">Browse advertised sessions, book available slots, and submit requests beyond the current schedule.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
     if df.empty:
         st.info("No pharmacist shifts have been scheduled yet. Contact admin.")
         return
-
-    df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
-    df = df.dropna(subset=['Date'])
 
     # All data, sorted, will be the base for filtering
     df_sorted = df.sort_values(['Date', 'am_pm', 'slot_index'])
@@ -571,23 +839,31 @@ def display_calendar(unbook_mode=False):
 
     # Date range slider for timeframe visualization
     today = datetime.today().date()
-    min_data_date = df['Date'].min().date() if not df.empty else today
+    yesterday = today - timedelta(days=1)
+    min_data_date = df['Date'].min().date() if not df.empty else yesterday
 
-    # The slider's start date can be the earlier of the first data point or today.
-    slider_min_date = min(min_data_date, today)
+    # The slider's start date can be the earlier of the first data point or yesterday.
+    slider_min_date = min(min_data_date, yesterday)
     # The slider's max date is 3 months from today.
     slider_max_date = today + timedelta(days=90)
 
-    if 'date_range' not in st.session_state:
-        # Default view is from today to 3 months out.
-        st.session_state.date_range = (today, slider_max_date)
+    default_start_date = max(slider_min_date, yesterday)
+    default_date_range = (default_start_date, slider_max_date)
+    current_day_key = today.isoformat()
 
+    # Reset the default range once per day so stale session state does not keep an old start date.
+    if st.session_state.get('date_range_initialized_for_day') != current_day_key:
+        st.session_state.date_range = default_date_range
+        st.session_state.date_range_initialized_for_day = current_day_key
+
+    _render_section_header("Available Sessions", eyebrow="Schedule", copy="Filter the live rota and book an available pharmacist slot.")
     selected_range = st.slider(
         "Select a date range to view",
         min_value=slider_min_date,
         max_value=slider_max_date,
         value=st.session_state.date_range,
-        format="ddd, D MMM YYYY"
+        format="ddd, D MMM YYYY",
+        width="stretch"
     )
     st.session_state.date_range = selected_range
 
@@ -617,31 +893,30 @@ def display_calendar(unbook_mode=False):
                 if not slot_data.empty:
                     row = slot_data.iloc[0]
                     pharmacist_name = row['pharmacist_name']
-                    if pharmacist_name and pharmacist_name != "None":
-                        st.markdown(f":orange[**{pharmacist_name}**]")
-                    else:
-                        st.markdown("**Available**")
+                    _render_slot_header(pharmacist_name, available_slot=True)
 
                     booked = str(row['booked']).upper() == "TRUE"
+                    footer_details = row['surgery'] if booked else None
                     btn_label = "09:00 - 12:45"
                     unique_key = f"{row['unique_code']}_{pharmacist_name}_{i}_am"
 
                     if unbook_mode:
                         if booked:
-                            if st.button(btn_label + " (Cancel)", key=unique_key):
+                            if st.button(btn_label + " (Cancel)", key=unique_key, type="secondary", use_container_width=True):
                                 cancel_booking(row.to_dict())
                         else:
-                            st.button(btn_label, key=unique_key, disabled=True)
+                            st.button(btn_label, key=unique_key, disabled=True, use_container_width=True)
                     else:
                         if booked:
-                            st.button(btn_label + " (Booked)", key=unique_key, disabled=True)
-                            if row['surgery']:
-                                st.caption(row['surgery'])
+                            st.button(btn_label + " (Booked)", key=unique_key, disabled=True, use_container_width=True)
                         else:
-                            if st.button(btn_label, key=unique_key):
+                            if st.button(btn_label, key=unique_key, type="primary", use_container_width=True):
                                 show_booking_dialog(row.to_dict())
+                    _render_slot_footer(footer_details)
                 else:
-                    st.button("Not Available", disabled=True, key=f"empty_{date.strftime('%Y%m%d')}_am_{i}")
+                    _render_slot_header(None, available_slot=False)
+                    st.button("Not Available", disabled=True, key=f"empty_{date.strftime('%Y%m%d')}_am_{i}", use_container_width=True)
+                    _render_slot_footer()
 
         # PM Shift
         st.markdown("**PM**")
@@ -653,39 +928,39 @@ def display_calendar(unbook_mode=False):
                 if not slot_data.empty:
                     row = slot_data.iloc[0]
                     pharmacist_name = row['pharmacist_name']
-                    if pharmacist_name and pharmacist_name != "None":
-                        st.markdown(f":orange[**{pharmacist_name}**]")
-                    else:
-                        st.markdown("**Available**")
+                    _render_slot_header(pharmacist_name, available_slot=True)
 
                     booked = str(row['booked']).upper() == "TRUE"
+                    footer_details = row['surgery'] if booked else None
                     btn_label = "13:15 - 17:00"
                     unique_key = f"{row['unique_code']}_{pharmacist_name}_{i}_pm"
 
                     if unbook_mode:
                         if booked:
-                            if st.button(btn_label + " (Cancel)", key=unique_key):
+                            if st.button(btn_label + " (Cancel)", key=unique_key, type="secondary", use_container_width=True):
                                 cancel_booking(row.to_dict())
                         else:
-                            st.button(btn_label, key=unique_key, disabled=True)
+                            st.button(btn_label, key=unique_key, disabled=True, use_container_width=True)
                     else:
                         if booked:
-                            st.button(btn_label + " (Booked)", key=unique_key, disabled=True)
-                            if row['surgery']:
-                                st.caption(row['surgery'])
+                            st.button(btn_label + " (Booked)", key=unique_key, disabled=True, use_container_width=True)
                         else:
-                            if st.button(btn_label, key=unique_key):
+                            if st.button(btn_label, key=unique_key, type="primary", use_container_width=True):
                                 show_booking_dialog(row.to_dict())
+                    _render_slot_footer(footer_details)
                 else:
-                    st.button("Not Available", disabled=True, key=f"empty_{date.strftime('%Y%m%d')}_pm_{i}")
+                    _render_slot_header(None, available_slot=False)
+                    st.button("Not Available", disabled=True, key=f"empty_{date.strftime('%Y%m%d')}_pm_{i}", use_container_width=True)
+                    _render_slot_footer()
 
         st.divider()
 
     # Add functionality for Practice Managers to submit booking requests beyond the advertised date
-    st.header("Submit Future Requests", help="Request sessions beyond the advertised schedule")
+    _render_section_band("Submit Future Requests", eyebrow="Beyond Advertised Dates", copy="Request support for sessions that are not yet on the rota.")
     start_date_beyond = last_advertised_date + timedelta(days=1)
     end_date_beyond = selected_range[1]
 
+    get_cover_requests_data.clear()
     cover_requests_df = get_cover_requests_data()
 
     current_date_beyond = start_date_beyond
@@ -694,9 +969,12 @@ def display_calendar(unbook_mode=False):
             st.markdown(f"**{current_date_beyond.strftime('%A, %d %B %Y')}**")
 
             # Display existing cover requests for this date
-            daily_cover_requests = cover_requests_df[
-                (cover_requests_df['cover_date'].dt.date == current_date_beyond)
-            ].sort_values(by='submission_timestamp')
+            if 'cover_date' in cover_requests_df.columns and 'submission_timestamp' in cover_requests_df.columns:
+                daily_cover_requests = cover_requests_df[
+                    cover_requests_df['cover_date'].dt.date == current_date_beyond
+                ].sort_values(by='submission_timestamp')
+            else:
+                daily_cover_requests = pd.DataFrame()
 
             if not daily_cover_requests.empty:
                 for _, req_row in daily_cover_requests.iterrows():
@@ -706,7 +984,7 @@ def display_calendar(unbook_mode=False):
                         st.caption(f"Session: {req_row['session']} | Reason: {req_row['reason']} | Description: {req_row['desc']}")
                     # Removed the description caption as per user's implicit feedback (it was removed from the example)
 
-            if st.button("Request Cover", key=f"interest_{current_date_beyond.strftime('%Y%m%d')}", icon=":material/event_upcoming:"):
+            if st.button("Request Cover", key=f"interest_{current_date_beyond.strftime('%Y%m%d')}", icon=":material/event_upcoming:", type="primary", use_container_width=True):
                 show_cover_request_dialog(current_date_beyond)
             st.divider()
         current_date_beyond += timedelta(days=1)
