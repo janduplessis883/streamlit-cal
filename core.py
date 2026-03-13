@@ -188,7 +188,7 @@ def reject_cover_request(request_uuid):
         """
         email_sent = send_resend_email(
             requester_email,
-            f"Update on your Pharma-Cal request for {cover_date_str}",
+            f"Parmacist Cover Request Rejected - {cover_date_str}",
             rejection_html,
         )
         if not email_sent:
@@ -356,7 +356,7 @@ def send_resend_email(to_email, subject, html_content, attachment_path=None):
         attachment = None
 
     params: dict[str, Any] = { # Explicitly type params as dict[str, Any]
-        "from": "Brompton Health PCN - Pharma-cal <hello@attribut.me>",
+        "from": "Pharma-cal <hello@attribut.me>",
         "to": to_email,
         "subject": subject,
         "html": html_content,

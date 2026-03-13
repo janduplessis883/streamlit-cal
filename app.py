@@ -14,6 +14,14 @@ from core import client
 from core import SPREADSHEET_ID, SHEET_NAME, get_schedule_data, get_cover_requests_data, add_cover_request_data, get_surgeries_data, add_surgery_data, delete_surgery_data, get_pharmacists_data, add_pharmacist_data, delete_pharmacist_data, cancel_booking, update_booking, reject_cover_request
 
 
+st.set_page_config(
+    page_title="Pharma-Cal Brompton Heatlh PCN",
+    layout="centered",
+    page_icon=":material/pill:",
+    initial_sidebar_state="collapsed",
+)
+
+
 def _clean_string_values(df: pd.DataFrame, column: str) -> list[str]:
     if df.empty or column not in df.columns:
         return []
@@ -188,43 +196,225 @@ def _apply_app_theme() -> None:
             margin-top: 0.22rem;
         }
 
-        .slot-header {
-            min-height: 2.9rem;
+        .slot-card {
+            background: linear-gradient(180deg, #ffffff 0%, #f8fbfc 100%);
+            border: 1px solid #d6e1ea;
+            border-radius: 16px;
+            box-shadow: 0 8px 18px rgba(15, 23, 42, 0.05);
             display: flex;
-            align-items: flex-end;
-            margin-bottom: 0.5rem;
-            font-size: 0.98rem;
+            flex-direction: column;
+            justify-content: flex-start;
+            margin-bottom: 0.65rem;
+            min-height: 7.1rem;
+            padding: 0.65rem 0.85rem 0.72rem;
+        }
+
+        .slot-card-placeholder {
+            margin-bottom: 0.65rem;
+            min-height: 7.1rem;
+        }
+
+        .slot-card-label {
+            color: var(--app-muted);
+            font-size: 0.7rem;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+
+        .slot-card-name {
+            color: #e85d04;
+            font-size: 1.06rem;
+            font-weight: 600;
+            line-height: 1.22;
+            margin-top: 0.28rem;
+        }
+
+        .slot-card-name--allocated {
+            color: #e85d04;
+        }
+
+        .slot-card-name--empty {
+            color: #94a3b8;
+        }
+
+        .slot-card-surgery {
+            color: #0077b6;
+            font-size: 0.82rem;
+            font-weight: 400;
+            line-height: 1.3;
+            margin-top: 0.35rem;
+            min-height: 1.9rem;
+        }
+
+        .slot-card-surgery-name {
+            font-weight: 700;
+        }
+
+        .slot-card-surgery--empty {
+            color: transparent;
+        }
+
+        .request-stat {
+            background: linear-gradient(135deg, #f8fbfc 0%, #eefaf8 100%);
+            border: 1px solid #d8ece8;
+            border-radius: 16px;
+            padding: 0.9rem 1rem;
+            margin-bottom: 0.75rem;
+        }
+
+        .request-stat-label {
+            color: var(--app-muted);
+            font-size: 0.78rem;
+            font-weight: 600;
+            letter-spacing: 0.03em;
+            text-transform: uppercase;
+        }
+
+        .request-stat-value {
+            color: var(--app-ink);
+            font-size: 1.5rem;
+            font-weight: 800;
+            line-height: 1.1;
+            margin-top: 0.2rem;
+        }
+
+        .request-stat-copy {
+            color: var(--app-muted);
+            font-size: 0.88rem;
+            margin-top: 0.18rem;
+        }
+
+        .request-day-heading {
+            color: var(--app-ink);
+            font-size: 1.05rem;
+            font-weight: 800;
+            margin: 0.9rem 0 0.2rem;
+        }
+
+        .request-day-copy {
+            color: var(--app-muted);
+            font-size: 0.9rem;
+            margin-bottom: 0.6rem;
+        }
+
+        .request-card {
+            background: #ffffff;
+            border: 1px solid var(--app-border);
+            border-radius: 18px;
+            box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+            padding: 1rem 1rem 0.95rem;
+            min-height: 100%;
+            margin-bottom: 0.9rem;
+        }
+
+        .request-card-top {
+            align-items: flex-start;
+            display: flex;
+            gap: 0.75rem;
+            justify-content: space-between;
+        }
+
+        .request-card-title {
+            color: var(--app-ink);
+            font-size: 1.06rem;
+            font-weight: 800;
             line-height: 1.2;
         }
 
-        .slot-header--name {
-            color: #b86200;
-            font-size: 1.05rem;
+        .request-card-session {
+            color: var(--app-accent);
+            font-size: 0.78rem;
             font-weight: 700;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            margin-top: 0.2rem;
         }
 
-        .slot-header--available {
+        .request-status-pill {
+            border-radius: 999px;
+            display: inline-block;
+            font-size: 0.74rem;
+            font-weight: 700;
+            padding: 0.28rem 0.62rem;
+            white-space: nowrap;
+        }
+
+        .request-status-pill--pending {
+            background: #fff7ed;
+            color: #c2410c;
+        }
+
+        .request-status-pill--approved {
+            background: #ecfdf5;
+            color: #15803d;
+        }
+
+        .request-status-pill--rejected {
+            background: #fef2f2;
+            color: #b91c1c;
+        }
+
+        .request-status-pill--default {
+            background: #eff6ff;
+            color: #1d4ed8;
+        }
+
+        .request-meta {
+            color: var(--app-muted);
+            font-size: 0.9rem;
+            line-height: 1.45;
+            margin-top: 0.75rem;
+        }
+
+        .request-meta strong {
             color: var(--app-ink);
-            font-weight: 700;
         }
 
-        .slot-header--empty {
-            color: transparent;
+        .request-notes {
+            background: var(--app-surface);
+            border-radius: 14px;
+            color: var(--app-ink);
+            font-size: 0.9rem;
+            line-height: 1.45;
+            margin-top: 0.8rem;
+            padding: 0.75rem 0.85rem;
         }
 
-        .slot-footer {
-            min-height: 1.75rem;
-            margin-top: 0.55rem;
-            font-size: 0.92rem;
-            line-height: 1.25;
+        .public-request-grid {
+            margin: 0.7rem 0 1rem;
         }
 
-        .slot-footer--filled {
-            color: #7c8699;
+        .public-request-card {
+            background: linear-gradient(180deg, #ffffff 0%, #f8fbfc 100%);
+            border: 1px solid #dbe4ee;
+            border-radius: 16px;
+            box-shadow: 0 8px 18px rgba(15, 23, 42, 0.05);
+            margin: 0.2rem 0.15rem 1rem;
+            padding: 0.85rem 0.9rem;
+            min-height: 100%;
         }
 
-        .slot-footer--empty {
-            color: transparent;
+        .public-request-card-title {
+            color: var(--app-ink);
+            font-size: 0.98rem;
+            font-weight: 800;
+            line-height: 1.2;
+        }
+
+        .public-request-card-meta {
+            color: var(--app-muted);
+            font-size: 0.88rem;
+            line-height: 1.45;
+            margin-top: 0.45rem;
+        }
+
+        .public-request-card-meta strong {
+            color: var(--app-ink);
+        }
+
+        .future-request-action-gap {
+            height: 1.35rem;
         }
         </style>
         """,
@@ -251,29 +441,330 @@ def _render_section_band(title: str, eyebrow: str | None = None, copy: str | Non
     )
 
 
-def _render_slot_header(pharmacist_name: str | None, *, available_slot: bool) -> None:
-    if pharmacist_name and pharmacist_name != "None":
-        content = escape(str(pharmacist_name))
-        css_class = "slot-header slot-header--name"
+def _render_slot_card(
+    pharmacist_name: str | None,
+    *,
+    surgery_name: str | None = None,
+    available_slot: bool,
+) -> None:
+    cleaned_name = str(pharmacist_name or "").strip()
+    cleaned_surgery = str(surgery_name or "").strip()
+
+    if not available_slot:
+        st.markdown("<div class='slot-card-placeholder'></div>", unsafe_allow_html=True)
+        return
+
+    if cleaned_name and cleaned_name != "None":
+        name = cleaned_name
+        name_class = "slot-card-name slot-card-name--allocated"
+        card_class = "slot-card"
     elif available_slot:
-        content = "Available"
-        css_class = "slot-header slot-header--available"
+        name = "Open slot"
+        name_class = "slot-card-name"
+        card_class = "slot-card"
+
+    surgery_html = (
+        f"<div class='slot-card-surgery'>Surgery: <span class='slot-card-surgery-name'>{escape(cleaned_surgery)}</span></div>"
+        if cleaned_surgery
+        else "<div class='slot-card-surgery slot-card-surgery--empty'>Surgery:</div>"
+    )
+
+    st.markdown(
+        f"""
+        <div class="{card_class}">
+            <div class="slot-card-label">Pharmacist</div>
+            <div class="{name_class}">{escape(name)}</div>
+            {surgery_html}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _format_datetime(value, fmt: str, fallback: str = "N/A") -> str:
+    if pd.isna(value):
+        return fallback
+
+    parsed = pd.to_datetime(value, errors="coerce")
+    if pd.isna(parsed):
+        return fallback
+
+    return parsed.strftime(fmt)
+
+
+def _normalize_date_range_value(
+    value,
+    *,
+    default_start,
+    default_end,
+):
+    if isinstance(value, tuple) and len(value) == 2:
+        start, end = value
+    elif isinstance(value, list) and len(value) == 2:
+        start, end = value
+    elif isinstance(value, datetime):
+        start = end = value.date()
+    elif hasattr(value, "year") and hasattr(value, "month") and hasattr(value, "day"):
+        start = end = value
     else:
-        content = "&nbsp;"
-        css_class = "slot-header slot-header--empty"
+        start, end = default_start, default_end
 
-    st.markdown(f"<div class='{css_class}'>{content}</div>", unsafe_allow_html=True)
+    if isinstance(start, datetime):
+        start = start.date()
+    if isinstance(end, datetime):
+        end = end.date()
+
+    if start > end:
+        start, end = end, start
+
+    return start, end
 
 
-def _render_slot_footer(details: str | None = None) -> None:
-    if details and str(details).strip():
-        content = escape(str(details).strip())
-        css_class = "slot-footer slot-footer--filled"
+def _render_request_stat(label: str, value: str, copy: str) -> None:
+    st.markdown(
+        f"""
+        <div class="request-stat">
+            <div class="request-stat-label">{escape(label)}</div>
+            <div class="request-stat-value">{escape(value)}</div>
+            <div class="request-stat-copy">{escape(copy)}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _toggle_sidebar_request_expanders() -> None:
+    expander_keys = st.session_state.get("sidebar_request_expander_keys", [])
+    if not expander_keys:
+        return
+
+    should_open = not all(st.session_state.get(key, False) for key in expander_keys)
+    for key in expander_keys:
+        st.session_state[key] = should_open
+
+    st.session_state.sidebar_request_expanders_all_open = should_open
+
+
+def _sync_sidebar_request_expanders() -> None:
+    expander_keys = st.session_state.get("sidebar_request_expander_keys", [])
+    if not expander_keys:
+        st.session_state.sidebar_request_expanders_all_open = False
+        return
+
+    st.session_state.sidebar_request_expanders_all_open = all(
+        st.session_state.get(key, False) for key in expander_keys
+    )
+
+
+def _request_status_badge(status: str | None) -> str:
+    normalized = (status or "Pending").strip() or "Pending"
+    tone = normalized.casefold()
+    if tone == "pending":
+        badge_class = "request-status-pill request-status-pill--pending"
+    elif tone == "approved":
+        badge_class = "request-status-pill request-status-pill--approved"
+    elif tone == "rejected":
+        badge_class = "request-status-pill request-status-pill--rejected"
     else:
-        content = "&nbsp;"
-        css_class = "slot-footer slot-footer--empty"
+        badge_class = "request-status-pill request-status-pill--default"
 
-    st.markdown(f"<div class='{css_class}'>{content}</div>", unsafe_allow_html=True)
+    return f"<span class='{badge_class}'>{escape(normalized.title())}</span>"
+
+
+def _prepare_future_requests_for_display(future_requests: pd.DataFrame) -> pd.DataFrame:
+    requests = future_requests.copy()
+    requests["cover_date"] = pd.to_datetime(requests["cover_date"], errors="coerce")
+    requests["submission_timestamp"] = pd.to_datetime(requests["submission_timestamp"], errors="coerce")
+    requests["status"] = (
+        requests["status"]
+        .fillna("Pending")
+        .astype(str)
+        .str.strip()
+        .replace("", "Pending")
+    )
+    requests = requests.dropna(subset=["cover_date"]).sort_values(
+        by=["cover_date", "submission_timestamp"],
+        kind="stable",
+    )
+
+    return requests
+
+
+def _future_request_card_markup(request: pd.Series) -> str:
+    notes = str(request.get("desc", "") or "").strip()
+    if notes and notes.casefold() == str(request.get("reason", "") or "").strip().casefold():
+        notes = ""
+
+    requester = escape(str(request.get("name", "") or "Unknown requester").strip())
+    requester_email = str(request.get("requester_email", "") or "").strip()
+    email_line = f"<br><strong>Email:</strong> {escape(requester_email)}" if requester_email else ""
+    surgery = escape(str(request.get("surgery", "") or "Unknown surgery").strip())
+    session = escape(str(request.get("session", "") or "Session not set").strip())
+    reason = escape(str(request.get("reason", "") or "Not provided").strip())
+    submitted_at = escape(_format_datetime(request.get("submission_timestamp"), "%d %b %Y %H:%M"))
+    notes_html = (
+        f"<div class='request-notes'><strong>Notes</strong><br>{escape(notes)}</div>"
+        if notes
+        else ""
+    )
+
+    return f"""
+        <div class="request-card">
+            <div class="request-card-top">
+                <div>
+                    <div class="request-card-title">{surgery}</div>
+                    <div class="request-card-session">{session}</div>
+                </div>
+                {_request_status_badge(request.get("status"))}
+            </div>
+            <div class="request-meta">
+                <strong>Requested by:</strong> {requester}{email_line}<br>
+                <strong>Reason:</strong> {reason}<br>
+                <strong>Submitted:</strong> {submitted_at}
+            </div>
+            {notes_html}
+        </div>
+    """
+
+
+def _future_request_public_card_markup(request: pd.Series) -> str:
+    surgery = escape(str(request.get("surgery", "") or "Unknown surgery").strip())
+    requester = escape(str(request.get("name", "") or "Unknown requester").strip())
+    submitted_at = escape(_format_datetime(request.get("submission_timestamp"), "%d %b %Y %H:%M"))
+
+    return f"""
+        <div class="public-request-card">
+            <div class="public-request-card-title">{surgery}</div>
+            <div class="public-request-card-meta">
+                <strong>Requester:</strong> {requester}<br>
+                <strong>Requested:</strong> {submitted_at}
+            </div>
+        </div>
+    """
+
+
+def _render_sidebar_request_action(request: pd.Series, key_prefix: str) -> None:
+    request_uuid = str(request.get("uuid", "") or "").strip()
+    request_status = str(request.get("status", "") or "Pending").strip()
+    requester_email = str(request.get("requester_email", "") or "").strip()
+
+    if request_status.casefold() == "rejected":
+        st.caption("Rejected")
+        return
+
+    if not requester_email:
+        st.caption("Requester email missing")
+        return
+
+    if not request_uuid:
+        st.caption("Request ID missing")
+        return
+
+    if st.button(
+        "Reject request",
+        key=f"{key_prefix}_{request_uuid}",
+        type="secondary",
+        icon=":material/block:",
+        use_container_width=True,
+        help="Reject this future cover request and notify the requester.",
+    ):
+        if reject_cover_request(request_uuid):
+            time.sleep(0.3)
+            st.rerun()
+
+
+def _render_future_requests_board(future_requests: pd.DataFrame, *, sidebar: bool = False) -> None:
+    requests = _prepare_future_requests_for_display(future_requests)
+
+    today = datetime.today().date()
+    next_week = today + timedelta(days=7)
+    total_requests = len(requests)
+    pending_requests = int(requests["status"].str.casefold().eq("pending").sum())
+    upcoming_this_week = int(requests["cover_date"].dt.date.le(next_week).sum())
+    surgery_names = requests["surgery"].fillna("").astype(str).str.strip()
+    surgeries_covered = int(surgery_names[surgery_names != ""].nunique())
+
+    if sidebar:
+        stat_row_one = st.sidebar.columns(2)
+        stat_row_two = st.sidebar.columns(2)
+        with stat_row_one[0]:
+            _render_request_stat("Total", str(total_requests), "Future requests")
+        with stat_row_one[1]:
+            _render_request_stat("Pending", str(pending_requests), "Awaiting review")
+        with stat_row_two[0]:
+            _render_request_stat("7 days", str(upcoming_this_week), "Due soon")
+        with stat_row_two[1]:
+            _render_request_stat("Surgeries", str(surgeries_covered), "Distinct sites")
+
+        st.sidebar.caption("Cross-check these requests against the live rota in the main calendar, then book the matching slot.")
+
+        grouped_requests = list(requests.groupby(requests["cover_date"].dt.date, sort=True))
+        expander_keys = [f"sidebar_future_request_{cover_date.isoformat()}" for cover_date, _ in grouped_requests]
+        st.session_state.sidebar_request_expander_keys = expander_keys
+
+        for index, key in enumerate(expander_keys):
+            if key not in st.session_state:
+                st.session_state[key] = index < 2
+
+        _sync_sidebar_request_expanders()
+        toggle_label = (
+            "Collapse all request days"
+            if st.session_state.get("sidebar_request_expanders_all_open", False)
+            else "Open all request days"
+        )
+        st.sidebar.button(
+            toggle_label,
+            key="sidebar_toggle_request_expanders",
+            on_click=_toggle_sidebar_request_expanders,
+            type="secondary",
+            icon=":material/unfold_more:",
+            use_container_width=True,
+        )
+
+        for index, (cover_date, daily_requests) in enumerate(grouped_requests):
+            request_count = len(daily_requests)
+            pending_today = int(daily_requests["status"].str.casefold().eq("pending").sum())
+            expander_key = expander_keys[index]
+            with st.sidebar.expander(
+                f"{cover_date.strftime('%a %d %b')} · {request_count} request{'s' if request_count != 1 else ''}",
+                expanded=st.session_state.get(expander_key, index < 2),
+                key=expander_key,
+                on_change=_sync_sidebar_request_expanders,
+            ):
+                st.caption(f"{pending_today} pending review")
+                for _, request in daily_requests.iterrows():
+                    st.markdown(_future_request_card_markup(request), unsafe_allow_html=True)
+                    _render_sidebar_request_action(request, key_prefix="sidebar_reject_cover_request")
+        return
+
+    stat_columns = st.columns(4)
+    with stat_columns[0]:
+        _render_request_stat("Total requests", str(total_requests), "All future requests on the board.")
+    with stat_columns[1]:
+        _render_request_stat("Pending review", str(pending_requests), "Still waiting for a decision.")
+    with stat_columns[2]:
+        _render_request_stat("Next 7 days", str(upcoming_this_week), "Requests landing within the next week.")
+    with stat_columns[3]:
+        _render_request_stat("Surgeries", str(surgeries_covered), "Distinct surgeries asking for cover.")
+
+    for cover_date, daily_requests in requests.groupby(requests["cover_date"].dt.date, sort=True):
+        request_count = len(daily_requests)
+        pending_today = int(daily_requests["status"].str.casefold().eq("pending").sum())
+        st.markdown(
+            f"<div class='request-day-heading'>{escape(cover_date.strftime('%A, %d %B %Y'))}</div>",
+            unsafe_allow_html=True,
+        )
+        st.markdown(
+            f"<div class='request-day-copy'>{request_count} request{'s' if request_count != 1 else ''} scheduled, {pending_today} pending review.</div>",
+            unsafe_allow_html=True,
+        )
+
+        card_columns = st.columns(2)
+        for idx, (_, request) in enumerate(daily_requests.iterrows()):
+            card_columns[idx % 2].markdown(
+                _future_request_card_markup(request),
+                unsafe_allow_html=True,
+            )
 
 
 def show_admin_panel(df):
@@ -284,8 +775,6 @@ def show_admin_panel(df):
 
     if admin_tab == "Surgery Session Plots":
         st.session_state.view = 'plot'
-    elif admin_tab == "View Future Requests":
-        st.session_state.view = 'future_requests'
     else:
         st.session_state.view = 'calendar'
 
@@ -332,9 +821,6 @@ def show_admin_panel(df):
                         'unique_code': row.get('unique_code', ''),
                         'pharmacist_name': row.get('pharmacist_name', 'None')
                     }
-
-            get_cover_requests_data.clear()
-            cover_requests_df = get_cover_requests_data()
 
             for date in dates_to_show:
                 is_weekend = date.weekday() >= 5
@@ -402,48 +888,6 @@ def show_admin_panel(df):
                                 label_visibility="collapsed",
                                 disabled=is_weekend or is_booked
                             )
-
-                # Display existing cover requests for this date
-                if 'cover_date' in cover_requests_df.columns and 'submission_timestamp' in cover_requests_df.columns:
-                    daily_cover_requests = cover_requests_df[
-                        cover_requests_df['cover_date'].dt.date == date.date()
-                    ].sort_values(by='submission_timestamp')
-                else:
-                    daily_cover_requests = pd.DataFrame()
-
-                if not daily_cover_requests.empty:
-                    st.markdown("**Cover Requests:**")
-                    for _, req_row in daily_cover_requests.iterrows():
-                        request_uuid = str(req_row.get('uuid', '')).strip()
-                        request_status = str(req_row.get('status', '') or 'Pending').strip()
-                        requester_email = str(req_row.get('requester_email', '') or '').strip()
-                        action_disabled = request_status.casefold() == 'rejected' or not requester_email or not request_uuid
-
-                        info_col, action_col = st.columns([0.72, 0.28])
-                        with info_col:
-                            st.caption(f"- **{req_row['surgery']}** ({req_row['session']}) requested by {req_row['name']}")
-                        with action_col:
-                            if request_status.casefold() == 'rejected':
-                                st.caption("Rejected")
-                                reject_clicked = False
-                            elif not requester_email:
-                                st.caption("Email missing")
-                                reject_clicked = False
-                            else:
-                                st.caption("Reject request")
-                                reject_clicked = st.form_submit_button(
-                                    "Reject",
-                                    key=f"reject_cover_request_{request_uuid or req_row.name}",
-                                    type="tertiary",
-                                    disabled=action_disabled,
-                                    use_container_width=True,
-                                )
-
-                        if reject_clicked and request_uuid:
-                            if reject_cover_request(request_uuid):
-                                time.sleep(0.3)
-                                st.rerun()
-
 
             submitted = st.form_submit_button("Update Availability", type="primary", icon=":material/save:", use_container_width=True)
             if submitted:
@@ -609,25 +1053,33 @@ def show_admin_panel(df):
         _render_section_header("Surgery Session Plots", eyebrow="Analytics", copy="Switch between activity views using a single control.", sidebar=True)
         st.session_state.plot_type = st.sidebar.radio("Select Plot Type", ["Absolute Session Plot", "Normalized Sessions per 1000 pts", "Monthly Sessions"], width="stretch")
     elif admin_tab == "View Future Requests":
-        _render_section_header("Future Cover Requests", eyebrow="Admin Review", copy="Requests from today onward ordered by submission time.")
-        _render_section_header("Future Cover Requests", eyebrow="Requests", copy="Review upcoming requests from the sidebar workspace.", sidebar=True)
+        _render_section_header("Future Cover Requests", eyebrow="Requests", copy="Keep requests visible here while booking against the live calendar.", sidebar=True)
         get_cover_requests_data.clear()
         cover_requests_df = get_cover_requests_data()
 
         required_columns = {'cover_date', 'surgery', 'name', 'session', 'reason', 'desc', 'submission_timestamp', 'status'}
         if not cover_requests_df.empty and required_columns.issubset(cover_requests_df.columns):
-            # Filter for requests from today and the future
             today = datetime.today().date()
+            selected_range = st.session_state.get("date_range")
+            if isinstance(selected_range, tuple) and len(selected_range) == 2:
+                range_start, range_end = selected_range
+            else:
+                range_start = today
+                range_end = today + timedelta(days=90)
+
+            visible_start = max(today, range_start)
             future_requests = cover_requests_df[
-                (cover_requests_df['cover_date'].dt.date >= today)
+                (cover_requests_df['cover_date'].dt.date >= visible_start)
+                & (cover_requests_df['cover_date'].dt.date <= range_end)
             ].sort_values(by='submission_timestamp')
 
             if not future_requests.empty:
-                st.dataframe(future_requests[['cover_date', 'surgery', 'name', 'session', 'reason', 'desc', 'status', 'submission_timestamp']], use_container_width=True)
+                st.sidebar.caption(f"Showing requests from {visible_start.strftime('%d %b %Y')} to {range_end.strftime('%d %b %Y')}.")
+                _render_future_requests_board(future_requests, sidebar=True)
             else:
-                st.info("No future cover requests found.")
+                st.sidebar.info("No future cover requests found in the selected date range.")
         else:
-            st.info("No cover requests submitted yet.")
+            st.sidebar.info("No cover requests submitted yet.")
 
     return unbook_mode
 
@@ -752,11 +1204,6 @@ def show_cover_request_dialog(cover_date):
         if cancel_button:
             st.rerun() # Rerun to close dialog
 
-
-
-st.set_page_config(page_title="Pharma-Cal Brompton Heatlh PCN", layout="centered", page_icon=":material/pill:")
-
-
 def display_calendar(unbook_mode=False):
     _apply_app_theme()
     c1, c2, c3 = st.columns([0.25, 0.25, 2], gap="small")
@@ -786,17 +1233,37 @@ def display_calendar(unbook_mode=False):
     # --- Admin Sidebar ---
 
     password = st.sidebar.text_input("", type="password", placeholder="Admin Login", label_visibility="collapsed", icon=":material/settings:")  # Admin password input
+    is_admin = password == st.secrets["admin_password"]
     if password == '':
         st.sidebar.image('images/logo22.png')
     df = _normalize_schedule_data(get_schedule_data())
+
+    today = datetime.today().date()
+    yesterday = today - timedelta(days=1)
+    min_data_date = df['Date'].min().date() if not df.empty else yesterday
+    slider_min_date = min(min_data_date, yesterday)
+    slider_max_date = (pd.Timestamp(yesterday) + pd.DateOffset(months=6)).date()
+    default_start_date = yesterday
+    default_end_date = (pd.Timestamp(yesterday) + pd.DateOffset(months=3)).date()
+    default_date_range = (default_start_date, min(default_end_date, slider_max_date))
+    current_day_key = today.isoformat()
 
     # Initialize view state if not already set
     if 'view' not in st.session_state:
         st.session_state.view = 'calendar'
     if 'plot_type' not in st.session_state:
         st.session_state.plot_type = "Absolute Session Plot" # Default plot type
+    if st.session_state.get('date_range_initialized_for_day') != current_day_key:
+        st.session_state.date_range = default_date_range
+        st.session_state.date_range_initialized_for_day = current_day_key
 
-    if password == st.secrets["admin_password"]:
+    st.session_state.date_range = _normalize_date_range_value(
+        st.session_state.get("date_range"),
+        default_start=default_start_date,
+        default_end=min(default_end_date, slider_max_date),
+    )
+
+    if is_admin:
         unbook_mode = show_admin_panel(df)
     elif password != "":
         st.sidebar.error("Incorrect password")
@@ -804,10 +1271,6 @@ def display_calendar(unbook_mode=False):
     # Display content based on the selected view
     if st.session_state.view == 'plot':
         display_plot(df, get_surgeries_data) # Pass get_surgeries_data as an argument
-        return
-    elif st.session_state.view == 'future_requests':
-        # The display logic for future requests is handled within show_admin_panel for this view
-        # No need to duplicate it here.
         return
 
     # --- Main Calendar Display ---
@@ -821,6 +1284,14 @@ def display_calendar(unbook_mode=False):
         """,
         unsafe_allow_html=True,
     )
+
+    if is_admin and st.session_state.get("admin_options_radio") == "View Future Requests":
+        _render_section_band(
+            "Review And Book",
+            eyebrow="Admin Workflow",
+            copy="Use the sidebar request board to cross-check dates, then book the matching pharmacist slot here.",
+        )
+
     if df.empty:
         st.info("No pharmacist shifts have been scheduled yet. Contact admin.")
         return
@@ -837,35 +1308,20 @@ def display_calendar(unbook_mode=False):
     else:
         last_advertised_date = upcoming['Date'].max().date()
 
-    # Date range slider for timeframe visualization
-    today = datetime.today().date()
-    yesterday = today - timedelta(days=1)
-    min_data_date = df['Date'].min().date() if not df.empty else yesterday
-
-    # The slider's start date can be the earlier of the first data point or yesterday.
-    slider_min_date = min(min_data_date, yesterday)
-    # The slider's max date is 3 months from today.
-    slider_max_date = today + timedelta(days=90)
-
-    default_start_date = max(slider_min_date, yesterday)
-    default_date_range = (default_start_date, slider_max_date)
-    current_day_key = today.isoformat()
-
-    # Reset the default range once per day so stale session state does not keep an old start date.
-    if st.session_state.get('date_range_initialized_for_day') != current_day_key:
-        st.session_state.date_range = default_date_range
-        st.session_state.date_range_initialized_for_day = current_day_key
-
     _render_section_header("Available Sessions", eyebrow="Schedule", copy="Filter the live rota and book an available pharmacist slot.")
     selected_range = st.slider(
         "Select a date range to view",
         min_value=slider_min_date,
         max_value=slider_max_date,
-        value=st.session_state.date_range,
         format="ddd, D MMM YYYY",
-        width="stretch"
+        width="stretch",
+        key="date_range",
     )
-    st.session_state.date_range = selected_range
+    selected_range = _normalize_date_range_value(
+        selected_range,
+        default_start=default_start_date,
+        default_end=min(default_end_date, slider_max_date),
+    )
 
     # Filter schedule based on the selected date range
     schedule_filtered = df_sorted[
@@ -893,10 +1349,9 @@ def display_calendar(unbook_mode=False):
                 if not slot_data.empty:
                     row = slot_data.iloc[0]
                     pharmacist_name = row['pharmacist_name']
-                    _render_slot_header(pharmacist_name, available_slot=True)
-
                     booked = str(row['booked']).upper() == "TRUE"
-                    footer_details = row['surgery'] if booked else None
+                    surgery_name = row['surgery'] if booked else None
+                    _render_slot_card(pharmacist_name, surgery_name=surgery_name, available_slot=True)
                     btn_label = "09:00 - 12:45"
                     unique_key = f"{row['unique_code']}_{pharmacist_name}_{i}_am"
 
@@ -912,11 +1367,9 @@ def display_calendar(unbook_mode=False):
                         else:
                             if st.button(btn_label, key=unique_key, type="primary", use_container_width=True):
                                 show_booking_dialog(row.to_dict())
-                    _render_slot_footer(footer_details)
                 else:
-                    _render_slot_header(None, available_slot=False)
+                    _render_slot_card(None, available_slot=False)
                     st.button("Not Available", disabled=True, key=f"empty_{date.strftime('%Y%m%d')}_am_{i}", use_container_width=True)
-                    _render_slot_footer()
 
         # PM Shift
         st.markdown("**PM**")
@@ -928,10 +1381,9 @@ def display_calendar(unbook_mode=False):
                 if not slot_data.empty:
                     row = slot_data.iloc[0]
                     pharmacist_name = row['pharmacist_name']
-                    _render_slot_header(pharmacist_name, available_slot=True)
-
                     booked = str(row['booked']).upper() == "TRUE"
-                    footer_details = row['surgery'] if booked else None
+                    surgery_name = row['surgery'] if booked else None
+                    _render_slot_card(pharmacist_name, surgery_name=surgery_name, available_slot=True)
                     btn_label = "13:15 - 17:00"
                     unique_key = f"{row['unique_code']}_{pharmacist_name}_{i}_pm"
 
@@ -947,21 +1399,23 @@ def display_calendar(unbook_mode=False):
                         else:
                             if st.button(btn_label, key=unique_key, type="primary", use_container_width=True):
                                 show_booking_dialog(row.to_dict())
-                    _render_slot_footer(footer_details)
                 else:
-                    _render_slot_header(None, available_slot=False)
+                    _render_slot_card(None, available_slot=False)
                     st.button("Not Available", disabled=True, key=f"empty_{date.strftime('%Y%m%d')}_pm_{i}", use_container_width=True)
-                    _render_slot_footer()
 
         st.divider()
 
     # Add functionality for Practice Managers to submit booking requests beyond the advertised date
     _render_section_band("Submit Future Requests", eyebrow="Beyond Advertised Dates", copy="Request support for sessions that are not yet on the rota.")
-    start_date_beyond = last_advertised_date + timedelta(days=1)
+    start_date_beyond = max(last_advertised_date + timedelta(days=1), selected_range[0])
     end_date_beyond = selected_range[1]
 
     get_cover_requests_data.clear()
     cover_requests_df = get_cover_requests_data()
+
+    if end_date_beyond < start_date_beyond:
+        st.info("Move the date range further ahead to view or submit future cover requests.")
+        return
 
     current_date_beyond = start_date_beyond
     while current_date_beyond <= end_date_beyond:
@@ -977,13 +1431,14 @@ def display_calendar(unbook_mode=False):
                 daily_cover_requests = pd.DataFrame()
 
             if not daily_cover_requests.empty:
-                for _, req_row in daily_cover_requests.iterrows():
-                    submission_time_str = req_row['submission_timestamp'].strftime('%d %b %y %H:%M') if pd.notna(req_row['submission_timestamp']) else "N/A"
-                    st.caption(f"**{req_row['surgery']}** requested by {req_row['name']} at {submission_time_str}")
-                    if password == st.secrets["admin_password"]: # Check if admin is logged in
-                        st.caption(f"Session: {req_row['session']} | Reason: {req_row['reason']} | Description: {req_row['desc']}")
-                    # Removed the description caption as per user's implicit feedback (it was removed from the example)
+                public_request_columns = st.columns(2)
+                for idx, (_, req_row) in enumerate(daily_cover_requests.iterrows()):
+                    public_request_columns[idx % 2].markdown(
+                        _future_request_public_card_markup(req_row),
+                        unsafe_allow_html=True,
+                    )
 
+            st.markdown("<div class='future-request-action-gap'></div>", unsafe_allow_html=True)
             if st.button("Request Cover", key=f"interest_{current_date_beyond.strftime('%Y%m%d')}", icon=":material/event_upcoming:", type="primary", use_container_width=True):
                 show_cover_request_dialog(current_date_beyond)
             st.divider()
