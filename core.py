@@ -147,6 +147,46 @@ def add_cover_request_data(cover_date, surgery, name, requester_email, session, 
         st.error(f"An error occurred while adding cover request data to Google Sheet: {e}")
 
 
+def accept_cover_request(request_uuid):
+    """Mark a cover request as approved."""
+    try:
+        sheet = _get_cover_requests_sheet()
+        headers = sheet.row_values(1)
+        request_cell = sheet.find(request_uuid)
+
+        if not request_cell:
+            st.error("Could not find the cover request to accept.")
+            return False
+
+        row_values = sheet.row_values(request_cell.row)
+        row_data = {
+            header: row_values[idx] if idx < len(row_values) else ""
+            for idx, header in enumerate(headers)
+        }
+
+        current_status = str(row_data.get("status", "")).strip().casefold()
+        if current_status == "approved":
+            st.info("This request has already been approved.")
+            return False
+
+        if current_status == "rejected":
+            st.info("This request has already been rejected.")
+            return False
+
+        status_col_idx = headers.index("status") + 1
+        decision_timestamp_col_idx = headers.index("decision_timestamp") + 1
+        approval_timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        sheet.update_cell(request_cell.row, status_col_idx, "Approved")
+        sheet.update_cell(request_cell.row, decision_timestamp_col_idx, approval_timestamp)
+
+        get_cover_requests_data.clear()
+        st.success("Request marked as approved.")
+        return True
+    except Exception as e:
+        st.error(f"An error occurred while approving the cover request: {e}")
+        return False
+
+
 def reject_cover_request(request_uuid):
     """Reject a cover request, email the requester, and persist the rejected status."""
     try:

@@ -11,11 +11,11 @@ from plots import display_plot, display_normalized_sessions_plot
 from core import client
 
 # Google Sheet details
-from core import SPREADSHEET_ID, SHEET_NAME, get_schedule_data, get_cover_requests_data, add_cover_request_data, get_surgeries_data, add_surgery_data, delete_surgery_data, get_pharmacists_data, add_pharmacist_data, delete_pharmacist_data, cancel_booking, update_booking, reject_cover_request
+from core import SPREADSHEET_ID, SHEET_NAME, get_schedule_data, get_cover_requests_data, add_cover_request_data, get_surgeries_data, add_surgery_data, delete_surgery_data, get_pharmacists_data, add_pharmacist_data, delete_pharmacist_data, cancel_booking, update_booking, accept_cover_request, reject_cover_request
 
 
 st.set_page_config(
-    page_title="Pharma-Cal Brompton Heatlh PCN",
+    page_title="Pharm-Cal [Brompton Health PCN]",
     layout="centered",
     page_icon=":material/pill:",
     initial_sidebar_state="collapsed",
@@ -477,6 +477,34 @@ def _apply_app_theme() -> None:
         .future-request-action-gap {
             height: 1.35rem;
         }
+
+        .sidebar-signoff {
+            align-items: center;
+            display: flex;
+            justify-content: center;
+            margin-top: 4.5rem;
+            padding-bottom: 0.5rem;
+        }
+
+        .sidebar-signoff-badge {
+            background: linear-gradient(135deg, #eefaf8 0%, #f8fbfc 100%);
+            border: 1px solid #cfe3e0;
+            border-radius: 999px;
+            box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
+            color: var(--app-accent);
+            display: inline-flex;
+            font-size: 0.92rem;
+            font-weight: 800;
+            letter-spacing: 0.02em;
+            line-height: 1;
+            padding: 0.68rem 1.05rem;
+            text-decoration: none;
+        }
+
+        .sidebar-signoff-badge:hover {
+            border-color: #9fd2ca;
+            color: #0b5f59;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -709,6 +737,10 @@ def _render_sidebar_request_action(request: pd.Series, key_prefix: str) -> None:
     request_status = str(request.get("status", "") or "Pending").strip()
     requester_email = str(request.get("requester_email", "") or "").strip()
 
+    if request_status.casefold() == "approved":
+        st.caption("Approved")
+        return
+
     if request_status.casefold() == "rejected":
         st.caption("Rejected")
         return
@@ -721,12 +753,25 @@ def _render_sidebar_request_action(request: pd.Series, key_prefix: str) -> None:
         st.caption("Request ID missing")
         return
 
-    if st.button(
-        "Reject request",
-        key=f"{key_prefix}_{request_uuid}",
+    reject_col, accept_col = st.columns(2)
+    if accept_col.button(
+        "Accept Request",
+        key=f"{key_prefix}_accept_{request_uuid}",
         type="secondary",
-        icon=":material/block:",
-        use_container_width=True,
+        icon=":material/check_circle:",
+        width="stretch",
+        help="Approve this future cover request before making the booking.",
+    ):
+        if accept_cover_request(request_uuid):
+            time.sleep(0.3)
+            st.rerun()
+
+    if reject_col.button(
+        "Reject Request",
+        key=f"{key_prefix}_reject_{request_uuid}",
+        type="secondary",
+        icon=":material/cancel:",
+        width="stretch",
         help="Reject this future cover request and notify the requester.",
     ):
         if reject_cover_request(request_uuid):
@@ -771,15 +816,14 @@ def _render_future_requests_board(future_requests: pd.DataFrame, *, sidebar: boo
         toggle_label = (
             "Collapse all request days"
             if st.session_state.get("sidebar_request_expanders_all_open", False)
-            else "Open all request days"
+            else "Expand all request days"
         )
         st.sidebar.button(
             toggle_label,
             key="sidebar_toggle_request_expanders",
             on_click=_toggle_sidebar_request_expanders,
             type="secondary",
-            icon=":material/unfold_more:",
-            use_container_width=True,
+            icon=":material/expand_content:",
         )
 
         for index, (cover_date, daily_requests) in enumerate(grouped_requests):
@@ -841,7 +885,7 @@ def show_admin_panel(df):
 
     if admin_tab == "Manage Availability":
         _render_section_header("Manage Availability", eyebrow="Scheduling", copy="Assign pharmacist availability and protect booked slots.", sidebar=True)
-        unbook_mode = st.sidebar.toggle("Unbook Mode", value=False, width="stretch")
+        unbook_mode = st.sidebar.toggle(":material/person_cancel: **Cancel Bookings**", value=False, width="stretch")
 
         today = datetime.today().date()
         three_months_later = today + timedelta(days=90)
@@ -888,7 +932,8 @@ def show_admin_panel(df):
                 date_str = date.strftime('%A, %d %B')
 
                 if is_weekend:
-                    st.markdown(f":orange[{date_str} (Weekend)]")
+                    st.caption(f":gray[{date_str} (Weekend)]")
+                    st.divider()
                 else:
                     st.markdown(f"**{date_str}**")
 
@@ -950,7 +995,7 @@ def show_admin_panel(df):
                                 disabled=is_weekend or is_booked
                             )
 
-            submitted = st.form_submit_button("Update Availability", type="primary", icon=":material/save:", use_container_width=True)
+            submitted = st.form_submit_button("Update Availability", type="primary", icon=":material/save:", width="stretch")
             if submitted:
                 EXPECTED_HEADERS = ["unique_code", "Date", "am_pm", "booked", "surgery", "email", "pharmacist_name", "slot_index"]
                 try:
@@ -1056,7 +1101,7 @@ def show_admin_panel(df):
             new_surgery_name = st.text_input("Surgery Name")
             new_surgery_email = st.text_input("Email Address")
             new_list_size = st.number_input("List Size", min_value=0, step=1)
-            add_surgery_submitted = st.form_submit_button("Add Surgery", type="primary", icon=":material/add:", use_container_width=True)
+            add_surgery_submitted = st.form_submit_button("Add Surgery", type="primary", icon=":material/add:", width="stretch")
 
             if add_surgery_submitted:
                 if new_surgery_name and new_surgery_email:
@@ -1075,7 +1120,7 @@ def show_admin_panel(df):
                 with col1:
                     st.markdown(f"**{row['surgery']}**<br>{row['email']}", unsafe_allow_html=True)
                 with col2:
-                    if st.button(":material/delete:", key=f"delete_surgery_{idx}", type="tertiary", use_container_width=True):
+                    if st.button(":material/delete:", key=f"delete_surgery_{idx}", type="tertiary", width="stretch"):
                         delete_surgery_data(row['surgery'], row['email'])
                         st.rerun()
         else:
@@ -1086,7 +1131,7 @@ def show_admin_panel(df):
         with st.sidebar.form("add_pharmacist_form", clear_on_submit=True):
             new_pharmacist_name = st.text_input("Pharmacist Name")
             new_pharmacist_email = st.text_input("Pharmacist Email")
-            add_pharmacist_submitted = st.form_submit_button("Add Pharmacist", type="primary", icon=":material/add:", use_container_width=True)
+            add_pharmacist_submitted = st.form_submit_button("Add Pharmacist", type="primary", icon=":material/add:", width="stretch")
 
             if add_pharmacist_submitted:
                 if new_pharmacist_name and new_pharmacist_email:
@@ -1105,7 +1150,7 @@ def show_admin_panel(df):
                 with col1:
                     st.markdown(f"**{row['Name']}**<br>{row['Email']}", unsafe_allow_html=True)
                 with col2:
-                    if st.button(":material/delete:", key=f"delete_pharmacist_{idx}", type="tertiary", use_container_width=True):
+                    if st.button(":material/delete:", key=f"delete_pharmacist_{idx}", type="tertiary", width="stretch"):
                         delete_pharmacist_data(row['Name'], row['Email'])
                         st.rerun()
         else:
@@ -1178,8 +1223,8 @@ def show_booking_dialog(slot):
     current_email = prefilled_email
 
     action_left, action_right = st.columns(2)
-    cancel_button = action_left.button("Cancel", type="secondary", use_container_width=True, key=f"cancel_booking_dialog_{slot['unique_code']}")
-    submitted = action_right.button("Submit Booking", type="primary", icon=":material/check_circle:", use_container_width=True, key=f"submit_booking_dialog_{slot['unique_code']}")
+    cancel_button = action_left.button("Cancel", type="secondary", width="stretch", key=f"cancel_booking_dialog_{slot['unique_code']}")
+    submitted = action_right.button("Submit Booking", type="primary", icon=":material/check_circle:", width="stretch", key=f"submit_booking_dialog_{slot['unique_code']}")
 
     if submitted:
         if not current_surgery or not current_email:
@@ -1252,8 +1297,8 @@ def show_cover_request_dialog(cover_date):
             )
 
         action_left, action_right = st.columns(2)
-        cancel_button = action_left.form_submit_button("Cancel", type="secondary", use_container_width=True)
-        submitted = action_right.form_submit_button("Submit Request", type="primary", icon=":material/send:", use_container_width=True)
+        cancel_button = action_left.form_submit_button("Cancel", type="secondary", width="stretch")
+        submitted = action_right.form_submit_button("Submit Request", type="primary", icon=":material/send:", width="stretch")
 
         if submitted:
             requested_by_name = requested_by_name.strip()
@@ -1309,7 +1354,7 @@ def display_calendar(unbook_mode=False):
     st.logo('images/logo223.png', size="large")
     # --- Admin Sidebar ---
 
-    password = st.sidebar.text_input("", type="password", placeholder="Admin Login", label_visibility="collapsed", icon=":material/settings:")  # Admin password input
+    password = st.sidebar.text_input("Admin password", type="password", placeholder="Admin Login", label_visibility="collapsed", icon=":material/settings:")  # Admin password input
     is_admin = password == st.secrets["admin_password"]
     if password == '':
         st.sidebar.image('images/logo22.png')
@@ -1434,19 +1479,19 @@ def display_calendar(unbook_mode=False):
 
                     if unbook_mode:
                         if booked:
-                            if st.button(btn_label + " (Cancel)", key=unique_key, type="secondary", use_container_width=True):
+                            if st.button(btn_label + " (Cancel)", key=unique_key, type="secondary", width="stretch"):
                                 cancel_booking(row.to_dict())
                         else:
-                            st.button(btn_label, key=unique_key, disabled=True, use_container_width=True)
+                            st.button(btn_label, key=unique_key, disabled=True, width="stretch")
                     else:
                         if booked:
-                            st.button(btn_label + " (Booked)", key=unique_key, disabled=True, use_container_width=True)
+                            st.button(btn_label + " (Booked)", key=unique_key, disabled=True, width="stretch")
                         else:
-                            if st.button(btn_label, key=unique_key, type="primary", use_container_width=True):
+                            if st.button(btn_label, key=unique_key, type="primary", width="stretch"):
                                 show_booking_dialog(row.to_dict())
                 else:
                     _render_slot_card(None, available_slot=False)
-                    st.button("Not Available", disabled=True, key=f"empty_{date.strftime('%Y%m%d')}_am_{i}", use_container_width=True)
+                    st.button("Not Available", disabled=True, key=f"empty_{date.strftime('%Y%m%d')}_am_{i}", width="stretch")
 
         # PM Shift
         st.markdown("**PM**")
@@ -1466,19 +1511,19 @@ def display_calendar(unbook_mode=False):
 
                     if unbook_mode:
                         if booked:
-                            if st.button(btn_label + " (Cancel)", key=unique_key, type="secondary", use_container_width=True):
+                            if st.button(btn_label + " (Cancel)", key=unique_key, type="secondary", width="stretch"):
                                 cancel_booking(row.to_dict())
                         else:
-                            st.button(btn_label, key=unique_key, disabled=True, use_container_width=True)
+                            st.button(btn_label, key=unique_key, disabled=True, width="stretch")
                     else:
                         if booked:
-                            st.button(btn_label + " (Booked)", key=unique_key, disabled=True, use_container_width=True)
+                            st.button(btn_label + " (Booked)", key=unique_key, disabled=True, width="stretch")
                         else:
-                            if st.button(btn_label, key=unique_key, type="primary", use_container_width=True):
+                            if st.button(btn_label, key=unique_key, type="primary", width="stretch"):
                                 show_booking_dialog(row.to_dict())
                 else:
                     _render_slot_card(None, available_slot=False)
-                    st.button("Not Available", disabled=True, key=f"empty_{date.strftime('%Y%m%d')}_pm_{i}", use_container_width=True)
+                    st.button("Not Available", disabled=True, key=f"empty_{date.strftime('%Y%m%d')}_pm_{i}", width="stretch")
 
         st.divider()
 
@@ -1522,7 +1567,7 @@ def display_calendar(unbook_mode=False):
                     )
 
             st.markdown("<div class='future-request-action-gap'></div>", unsafe_allow_html=True)
-            if st.button("Request Cover", key=f"interest_{current_date_beyond.strftime('%Y%m%d')}", icon=":material/event_upcoming:", type="primary", use_container_width=True):
+            if st.button("Request Cover", key=f"interest_{current_date_beyond.strftime('%Y%m%d')}", icon=":material/event_upcoming:", type="primary", width="stretch"):
                 show_cover_request_dialog(current_date_beyond)
             st.divider()
         current_date_beyond += timedelta(days=1)
@@ -1530,4 +1575,17 @@ def display_calendar(unbook_mode=False):
 if __name__ == "__main__":
     display_calendar()
 
-    st.sidebar.html("""<BR><BR><BR><BR><BR><BR><center><img alt="Static Badge" src="https://img.shields.io/badge/GitHub-janduplessis883-%23316576"></center>""")
+    st.sidebar.html(
+        """
+        <div class="sidebar-signoff">
+            <a
+                class="sidebar-signoff-badge"
+                href="https://github.com/janduplessis883"
+                target="_blank"
+                rel="noopener noreferrer"
+            >
+                janduplessis883
+            </a>
+        </div>
+        """
+    )

@@ -164,7 +164,7 @@ def display_plot(df, get_surgeries_data_func):
             tickformat="%b\n%Y" # Format as Jan\n2025
         )
 
-    st.plotly_chart(fig2, use_container_width=True, key="surgery_plot")
+    st.plotly_chart(fig2, width="stretch", key="surgery_plot")
 
 def display_normalized_sessions_plot(get_schedule_data_func, get_surgeries_data_func):
     df = get_schedule_data_func()
@@ -212,4 +212,4 @@ def display_normalized_sessions_plot(get_schedule_data_func, get_surgeries_data_
         annotation_text=f"Mean: {mean_sessions:.2f}",
         annotation_position="top right"
     )
-    st.plotly_chart(fig, use_container_width=True, key="user_plot")
+    st.plotly_chart(fig, width="stretch", key="user_plot")
