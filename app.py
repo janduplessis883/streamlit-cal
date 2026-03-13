@@ -30,6 +30,67 @@ def _clean_string_values(df: pd.DataFrame, column: str) -> list[str]:
     return sorted(value for value in cleaned.unique().tolist() if value)
 
 
+def _normalize_column_key(value: str) -> str:
+    return "".join(char for char in str(value).strip().casefold() if char.isalnum())
+
+
+def _get_matching_column(df: pd.DataFrame, aliases: list[str]) -> str | None:
+    if df.empty:
+        return None
+
+    alias_keys = {_normalize_column_key(alias) for alias in aliases}
+    for column in df.columns:
+        if _normalize_column_key(column) in alias_keys:
+            return str(column)
+    return None
+
+
+def _get_surgery_contact_defaults(surgeries_df: pd.DataFrame, selected_surgery: str) -> tuple[str, str]:
+    if surgeries_df.empty or not selected_surgery:
+        return "", ""
+
+    surgery_column = _get_matching_column(surgeries_df, ["surgery"])
+    if not surgery_column:
+        return "", ""
+
+    normalized_surgery = str(selected_surgery).strip().casefold()
+    selected_rows = surgeries_df[
+        surgeries_df[surgery_column].fillna("").astype(str).str.strip().str.casefold() == normalized_surgery
+    ]
+    if selected_rows.empty:
+        return "", ""
+
+    selected_row = selected_rows.iloc[0]
+    name_column = _get_matching_column(
+        surgeries_df,
+        [
+            "name",
+            "requester_name",
+            "requestor_name",
+            "requested_by",
+            "requester",
+            "contact_name",
+            "contact",
+            "username",
+            "user_name",
+        ],
+    )
+    email_column = _get_matching_column(
+        surgeries_df,
+        [
+            "email",
+            "requester_email",
+            "requestor_email",
+            "contact_email",
+            "email_address",
+        ],
+    )
+
+    prefilled_name = str(selected_row.get(name_column, "") or "").strip() if name_column else ""
+    prefilled_email = str(selected_row.get(email_column, "") or "").strip() if email_column else ""
+    return prefilled_name, prefilled_email
+
+
 def _normalize_schedule_data(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df.copy()
@@ -1142,39 +1203,52 @@ def show_cover_request_dialog(cover_date):
         st.warning("No surgeries are configured yet. Add one in the Admin Panel before submitting a cover request.")
         return
 
-    with st.form(key=f"form_cover_request_{cover_date.strftime('%Y%m%d')}"):
-        selected_surgery = st.selectbox(
-            "Select Surgery",
-            [""] + surgery_names, # Add an empty option for initial selection
-            key=f"cover_surgery_{cover_date.strftime('%Y%m%d')}"
-        )
+    date_key = cover_date.strftime('%Y%m%d')
+    surgery_key = f"cover_surgery_{date_key}"
+    name_key = f"cover_name_{date_key}"
+    email_key = f"cover_email_{date_key}"
+    prefill_source_key = f"cover_prefill_source_{date_key}"
+
+    selected_surgery = st.selectbox(
+        "Select Surgery",
+        [""] + surgery_names,
+        key=surgery_key,
+    )
+    prefilled_name, prefilled_email = _get_surgery_contact_defaults(surgeries_df, selected_surgery)
+
+    if st.session_state.get(prefill_source_key) != selected_surgery:
+        st.session_state[name_key] = prefilled_name
+        st.session_state[email_key] = prefilled_email
+        st.session_state[prefill_source_key] = selected_surgery
+
+    with st.form(key=f"form_cover_request_{date_key}"):
         requested_by_name = st.text_input(
             "Requested by (Your Name)",
-            key=f"cover_name_{cover_date.strftime('%Y%m%d')}"
+            key=name_key
         )
         requested_by_email = st.text_input(
             "Requester Email",
-            key=f"cover_email_{cover_date.strftime('%Y%m%d')}"
+            key=email_key
         )
 
         selected_session = st.selectbox(
             "Session",
             ['AM', 'PM', 'Full-day'],
-            key=f"cover_session_{cover_date.strftime('%Y%m%d')}"
+            key=f"cover_session_{date_key}"
         )
 
         reason_options = ['Annual Leave', 'Study Leave', 'Other']
         selected_reason = st.selectbox(
             "Reason",
             reason_options,
-            key=f"cover_reason_{cover_date.strftime('%Y%m%d')}"
+            key=f"cover_reason_{date_key}"
         )
 
         other_reason_text = ""
         if selected_reason == "Other":
             other_reason_text = st.text_input(
                 "Please specify other reason",
-                key=f"other_reason_text_{cover_date.strftime('%Y%m%d')}"
+                key=f"other_reason_text_{date_key}"
             )
 
         action_left, action_right = st.columns(2)
@@ -1182,6 +1256,9 @@ def show_cover_request_dialog(cover_date):
         submitted = action_right.form_submit_button("Submit Request", type="primary", icon=":material/send:", use_container_width=True)
 
         if submitted:
+            requested_by_name = requested_by_name.strip()
+            requested_by_email = requested_by_email.strip()
+            other_reason_text = other_reason_text.strip()
             final_reason = selected_reason
             final_description = "" # Initialize final_description
 
@@ -1412,6 +1489,12 @@ def display_calendar(unbook_mode=False):
 
     get_cover_requests_data.clear()
     cover_requests_df = get_cover_requests_data()
+    if "status" in cover_requests_df.columns:
+        visible_cover_requests_df = cover_requests_df[
+            cover_requests_df["status"].fillna("").astype(str).str.strip().str.casefold() != "rejected"
+        ].copy()
+    else:
+        visible_cover_requests_df = cover_requests_df
 
     if end_date_beyond < start_date_beyond:
         st.info("Move the date range further ahead to view or submit future cover requests.")
@@ -1423,9 +1506,9 @@ def display_calendar(unbook_mode=False):
             st.markdown(f"**{current_date_beyond.strftime('%A, %d %B %Y')}**")
 
             # Display existing cover requests for this date
-            if 'cover_date' in cover_requests_df.columns and 'submission_timestamp' in cover_requests_df.columns:
-                daily_cover_requests = cover_requests_df[
-                    cover_requests_df['cover_date'].dt.date == current_date_beyond
+            if 'cover_date' in visible_cover_requests_df.columns and 'submission_timestamp' in visible_cover_requests_df.columns:
+                daily_cover_requests = visible_cover_requests_df[
+                    visible_cover_requests_df['cover_date'].dt.date == current_date_beyond
                 ].sort_values(by='submission_timestamp')
             else:
                 daily_cover_requests = pd.DataFrame()
